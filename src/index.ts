@@ -56,6 +56,7 @@ const commands = [
   new SlashCommandBuilder().setName('join').setDescription('Join VC + choose OpenClaw session'),
   new SlashCommandBuilder().setName('leave').setDescription('Leave current voice channel'),
   new SlashCommandBuilder().setName('listen').setDescription('Listen, transcribe, and reply in voice'),
+  new SlashCommandBuilder().setName('info').setDescription('Show statistics'),
 ].map((c) => c.toJSON());
 
 async function registerCommands() {
@@ -97,6 +98,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (interaction.commandName === 'listen') {
         await handleListen(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'info') {
+        await handleInfo(interaction);
         return;
       }
     }
@@ -480,6 +486,11 @@ async function convertPcmToWav(pcmPath: string, wavPath: string): Promise<void> 
     ffmpeg.on('error', reject);
     ffmpeg.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`))));
   });
+}
+
+async function handleInfo(interaction: ChatInputCommandInteraction) {
+  await interaction.editReply('This is a temporary test');
+  
 }
 
 async function transcribeWav(wavPath: string): Promise<string> {

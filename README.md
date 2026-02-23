@@ -1,165 +1,90 @@
 # OpenClaw Discord Voice Assistant
 
-Ein Discord-Bot, der Sprache aus einem Voice Channel aufnimmt, lokal transkribiert (Whisper), OpenClaw befragt und die Antwort wieder als Stimme im Channel abspielt.
+Voice bridge between Discord and OpenClaw.
 
-## Features
+This bot joins a Discord voice channel, records speech, transcribes it locally with Whisper, sends the prompt to OpenClaw, and plays the response back as synthesized voice.
 
-- Slash Commands:
-  - `/ping` → Bot-Healthcheck
-  - `/join` → Session-Auswahl (neu oder bestehend) + Talk/Action Mode
-  - `/listen` → Sprache aufnehmen, transkribieren, OpenClaw fragen, Antwort abspielen
-  - `/leave` → Voice Channel verlassen
-- **Talk Mode**: Nur normale Antworten (keine Tool-Ausführung)
-- **Action Mode**: OpenClaw darf echte Aktionen/Tools ausführen
-- Lokale Speech-to-Text mit `whisper-cli`
-- Lokale Text-to-Speech mit macOS `say`
+## Highlights
 
----
+- Discord slash commands for voice workflow
+- Session-aware OpenClaw integration
+- Two operation modes:
+  - **Talk Mode** (conversation only)
+  - **Action Mode** (OpenClaw may execute tools)
+- Local speech-to-text (Whisper via `whisper-cli`)
+- Local text-to-speech on macOS (`say`)
 
-## Voraussetzungen
+## Commands
 
-- macOS (wegen `say`)
+- `/ping` — health check
+- `/join` — join voice + choose session + choose mode
+- `/listen` — record, transcribe, query OpenClaw, play reply
+- `/leave` — disconnect bot from voice channel
+- `/info` — show bot stats/status (basic, extendable)
+
+## Architecture (high-level)
+
+1. Discord interaction received
+2. Voice stream captured from configured speaker
+3. Opus → PCM → WAV conversion (`ffmpeg`)
+4. Transcription (`whisper-cli` + model file)
+5. OpenClaw request (`openclaw agent --json`)
+6. TTS generation (`say`)
+7. Audio playback into Discord voice channel
+
+## Requirements
+
+- macOS (currently required because of `say`)
 - Node.js 20+
-- ffmpeg
-- whisper.cpp CLI (`whisper-cli`)
-- OpenClaw CLI (`openclaw`)
-- Discord Bot Token + App Setup
+- `ffmpeg`
+- `whisper-cli` (from `whisper-cpp`)
+- OpenClaw CLI (`openclaw`) configured on host
+- Discord bot credentials
 
-### 1) System-Tools installieren
-
-```bash
-brew install ffmpeg
-brew install whisper-cpp
-```
-
-OpenClaw CLI muss ebenfalls installiert und im PATH verfügbar sein.
-
----
-
-## Installation
+## Quick Start
 
 ```bash
-git clone https://github.com/<DEIN-USERNAME>/OpenClaw-Discord-Voice.git
+git clone https://github.com/jx-grxf/OpenClaw-Discord-Voice.git
 cd OpenClaw-Discord-Voice
 npm install
-```
-
-### 2) Whisper-Modell herunterladen
-
-Lege das Modell nach `models/ggml-base.bin`.
-
-Ordnerstruktur:
-
-```text
-models/
-└── ggml-base.bin
-```
-
-### 3) `.env` anlegen
-
-```env
-DISCORD_TOKEN=dein_bot_token
-DISCORD_CLIENT_ID=deine_application_id
-DISCORD_GUILD_ID=deine_server_id
-DISCORD_USER_ID=deine_discord_user_id
-```
-
-**Hinweis:** Aktuell wird beim Listen gezielt `DISCORD_USER_ID` abonniert.
-
----
-
-## Discord Setup (kurz)
-
-1. Im [Discord Developer Portal](https://discord.com/developers/applications) App erstellen
-2. Bot erstellen + Token kopieren
-3. Unter OAuth2 URL für den Bot generieren (Scopes: `bot`, `applications.commands`)
-4. Bot auf deinen Server einladen
-5. Bot braucht Voice- und Senderechte im Zielserver
-
----
-
-## Starten
-
-### Development
-
-```bash
+cp .env.example .env
+# fill .env values
 npm run dev
 ```
 
-### Production Build
+For full setup details, see:
+- `docs/INSTALLATION.md`
+- `docs/USAGE.md`
 
-```bash
-npm run build
-npm start
-```
+## OpenClaw References
 
-Beim Start werden die Slash-Commands für die Guild registriert.
+- Docs: <https://docs.openclaw.ai>
+- GitHub: <https://github.com/openclaw/openclaw>
+- Community: <https://discord.com/invite/clawd>
 
----
-
-## Nutzung
-
-1. In Discord in einen Voice Channel gehen
-2. `/join` ausführen
-3. Session wählen (neu oder bestehend)
-4. Modus wählen:
-   - **Talk Mode**
-   - **Action Mode**
-5. `/listen` ausführen und sprechen
-6. Antwort wird als Text + Audio geliefert
-
----
-
-## Projektstruktur
+## Repository Layout
 
 ```text
-src/index.ts       # Hauptlogik (Discord + Audio + OpenClaw Bridge)
-dist/              # Build-Output
-tmp/               # Temporäre Audiodateien/Transkripte
-models/            # Whisper-Modell
+src/index.ts          # Main bot logic
+package.json          # Scripts and dependencies
+tsconfig.json         # TypeScript config
+docs/                 # Installation/usage docs
 ```
 
----
+## Security Notes
 
-## Troubleshooting
+- Never commit `.env`
+- Rotate Discord and OpenClaw credentials if leaked
+- Use **Action Mode** only in trusted environments
+- Review `SECURITY.md` before public deployment
 
-### `whisper-cli` not found
+## Public Readiness Status
 
-```bash
-which whisper-cli
-```
+- ✅ `.env` excluded from git
+- ✅ Large model binaries excluded from git (`models/*.bin`)
+- ✅ Setup docs + usage docs added
+- ⚠️ Known limitation: speaker capture uses `DISCORD_USER_ID` targeting
 
-Falls leer: `brew install whisper-cpp`.
+## License
 
-### `ffmpeg` not found
-
-```bash
-which ffmpeg
-```
-
-Falls leer: `brew install ffmpeg`.
-
-### Bot reagiert nicht auf Slash Commands
-
-- Stimmt `DISCORD_GUILD_ID`?
-- Bot neu starten (Commands werden beim Start registriert)
-- Prüfen, ob Bot auf dem Server ist
-
-### Keine/fehlerhafte Audioausgabe
-
-- Prüfen ob `say` auf macOS verfügbar ist
-- Voice-Rechte des Bots prüfen
-
----
-
-## Sicherheit
-
-- `.env` niemals committen
-- Tokens regelmäßig rotieren
-- Action Mode nur in vertrauenswürdigen Umgebungen verwenden
-
----
-
-## Lizenz
-
-Private Nutzung / nach Bedarf anpassen.
+MIT (see `LICENSE`).

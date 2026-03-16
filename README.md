@@ -1,6 +1,19 @@
-# OpenClaw Discord Voice Bridge
+<div align="center">
 
-Experimental, self-hosted Discord voice bridge for OpenClaw.
+# 🎙️ OpenClaw Discord Voice Bridge
+
+**Experimental, self-hosted Discord voice bridge for OpenClaw**
+
+![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=white)
+![Discord.js](https://img.shields.io/badge/Discord.js-14-5865F2?logo=discord&logoColor=white)
+![Whisper](https://img.shields.io/badge/Whisper-STT-412991?logo=openai&logoColor=white)
+![ffmpeg](https://img.shields.io/badge/ffmpeg-audio-007808?logo=ffmpeg&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-TTS-000000?logo=apple&logoColor=white)
+![dotenv](https://img.shields.io/badge/dotenv-config-ECD53F?logo=dotenv&logoColor=black)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+</div>
 
 This bot joins a Discord voice channel, captures one spoken turn from the user who invoked `/listen`, transcribes it locally with Whisper, sends the transcript to a local `openclaw` CLI session, and plays the reply back with macOS `say`.
 

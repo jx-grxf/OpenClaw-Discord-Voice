@@ -6,9 +6,16 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
-  "keywords": ["openclaw", "discord", "voice", "whisper", "typescript"],
+  "keywords": [
+    "openclaw",
+    "discord",
+    "voice",
+    "whisper",
+    "typescript"
+  ],
   "author": "Johannes Grof",
   "license": "MIT",
   "type": "commonjs",
@@ -21,7 +28,7 @@
   },
   "homepage": "https://github.com/jx-grxf/OpenClaw-Discord-Voice#readme",
   "dependencies": {
-    "@discordjs/voice": "^0.19.0",
+    "@discordjs/voice": "^0.19.1",
     "@snazzah/davey": "^0.1.9",
     "discord.js": "^14.25.1",
     "dotenv": "^17.3.1",

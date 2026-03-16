@@ -18,9 +18,9 @@ export async function getOrCreateConnectionFromMember(
   const guild = interaction.guild;
   if (!guild) {
     if ('deferred' in interaction && interaction.deferred) {
-      await interaction.editReply({ content: 'Nur im Server nutzbar.' });
+      await interaction.editReply({ content: 'This command only works inside a server.' });
     } else if (interaction.isRepliable()) {
-      await interaction.reply({ content: 'Nur im Server nutzbar.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'This command only works inside a server.', flags: MessageFlags.Ephemeral });
     }
     return null;
   }
@@ -28,16 +28,37 @@ export async function getOrCreateConnectionFromMember(
   const member = await guild.members.fetch(interaction.user.id);
   const channel = member.voice.channel;
   if (!channel) {
+    const message = 'Join a voice channel first, then try again.';
     if ('deferred' in interaction && interaction.deferred) {
-      await interaction.editReply({ content: 'Bitte geh zuerst in einen Voice Channel.', embeds: [], components: [] });
+      await interaction.editReply({ content: message, embeds: [], components: [] });
     } else {
-      await interaction.reply({ content: 'Bitte geh zuerst in einen Voice Channel.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
     }
     return null;
   }
 
   let connection = getVoiceConnection(guild.id);
   if (!connection) {
+    console.log('Creating voice connection', {
+      guildId: guild.id,
+      channelId: channel.id,
+      userId: interaction.user.id,
+    });
+    connection = joinVoiceChannel({
+      channelId: channel.id,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: false,
+    });
+  } else if (connection.joinConfig.channelId !== channel.id) {
+    console.log('Moving voice connection', {
+      guildId: guild.id,
+      fromChannelId: connection.joinConfig.channelId,
+      toChannelId: channel.id,
+      userId: interaction.user.id,
+    });
+    connection.destroy();
     connection = joinVoiceChannel({
       channelId: channel.id,
       guildId: guild.id,
@@ -48,6 +69,10 @@ export async function getOrCreateConnectionFromMember(
   }
 
   await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+  console.log('Voice connection ready', {
+    guildId: guild.id,
+    channelId: channel.id,
+    userId: interaction.user.id,
+  });
   return connection;
 }
-

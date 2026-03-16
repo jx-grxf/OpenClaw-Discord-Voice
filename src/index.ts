@@ -1,14 +1,7 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
-import {
-  handleInfo,
-  handleJoinButtons,
-  handleJoinChoice,
-  handleLeave,
-  handleListen,
-  handleModeButtons,
-  handleSessionPick,
-} from './discord/handlers.js';
+import { assertStartupReadiness } from './diagnostics.js';
+import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -22,14 +15,15 @@ function requireEnv(name: string): string {
 const DISCORD_TOKEN = requireEnv('DISCORD_TOKEN');
 const DISCORD_CLIENT_ID = requireEnv('DISCORD_CLIENT_ID');
 const DISCORD_GUILD_ID = requireEnv('DISCORD_GUILD_ID');
-const DISCORD_USER_ID = requireEnv('DISCORD_USER_ID');
+const DISCORD_USER_ID = process.env.DISCORD_USER_ID?.trim() || null;
+assertStartupReadiness(process.env);
 
 const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('Check if bot is alive'),
-  new SlashCommandBuilder().setName('join').setDescription('Join VC + choose OpenClaw session'),
+  new SlashCommandBuilder().setName('join').setDescription('Join your voice channel and prepare the bridge'),
   new SlashCommandBuilder().setName('leave').setDescription('Leave current voice channel'),
   new SlashCommandBuilder().setName('listen').setDescription('Listen, transcribe, and reply in voice'),
-  new SlashCommandBuilder().setName('info').setDescription('Show statistics'),
+  new SlashCommandBuilder().setName('info').setDescription('Show bridge status and dependency health'),
 ].map((c) => c.toJSON());
 
 async function registerCommands() {
@@ -37,7 +31,7 @@ async function registerCommands() {
   await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID), {
     body: commands,
   });
-  console.log('✅ Slash commands registered');
+  console.log('Slash commands registered');
 }
 
 const client = new Client({
@@ -45,7 +39,7 @@ const client = new Client({
 });
 
 client.once('clientReady', async () => {
-  console.log(`✅ Logged in as ${client.user?.tag}`);
+  console.log(`Logged in as ${client.user?.tag}`);
   await registerCommands();
 });
 
@@ -53,12 +47,12 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'ping') {
-        await interaction.reply('pong 🏓');
+        await interaction.reply('pong');
         return;
       }
 
       if (interaction.commandName === 'join') {
-        await handleJoinChoice(interaction);
+        await handleJoin(interaction);
         return;
       }
 
@@ -80,25 +74,10 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
-    if (interaction.isButton()) {
-      if (interaction.customId.startsWith('join_')) {
-        await handleJoinButtons(interaction);
-        return;
-      }
-      if (interaction.customId.startsWith('mode_')) {
-        await handleModeButtons(interaction);
-        return;
-      }
-    }
-
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('join_pick_session:')) {
-      await handleSessionPick(interaction);
-      return;
-    }
   } catch (err) {
     console.error('Command error:', err);
     if (!interaction.isRepliable()) return;
-    const msg = `❌ Error: ${err instanceof Error ? err.message : 'unknown error'}`;
+    const msg = `Error: ${err instanceof Error ? err.message : 'unknown error'}`;
     try {
       if (interaction.deferred) {
         await interaction.editReply({ content: msg });

@@ -1,90 +1,71 @@
-# OpenClaw Discord Voice Assistant
+# OpenClaw Discord Voice Bridge
 
-Voice bridge between Discord and OpenClaw.
+Simple Discord voice bridge for OpenClaw.
 
-This bot joins a Discord voice channel, records speech, transcribes it locally with Whisper, sends the prompt to OpenClaw, and plays the response back as synthesized voice.
+The bot joins your voice channel, captures one spoken turn from the user who invoked `/listen`, transcribes it locally with Whisper, sends the transcript to OpenClaw through a real CLI session, and plays the reply back in the channel.
 
-## Highlights
-
-- Discord slash commands for voice workflow
-- Session-aware OpenClaw integration
-- Two operation modes:
-  - **Talk Mode** (conversation only)
-  - **Action Mode** (OpenClaw may execute tools)
-- Local speech-to-text (Whisper via `whisper-cli`)
-- Local text-to-speech on macOS (`say`)
+Each Discord user gets a stable voice session key. The real OpenClaw session is created on the first successful `/listen` turn and then reused for later turns.
 
 ## Commands
 
-- `/ping` — health check
-- `/join` — join voice + choose session + choose mode
-- `/listen` — record, transcribe, query OpenClaw, play reply
-- `/leave` — disconnect bot from voice channel
-- `/info` — show bot stats/status (basic, extendable)
+- `/ping` - simple health check
+- `/join` - join your current voice channel and prepare your voice session key
+- `/listen` - capture one spoken turn, send it to OpenClaw, and play the reply
+- `/leave` - disconnect the bot from voice
+- `/info` - show bridge status, session status, and dependency health
 
-## Architecture (high-level)
+## Simplifications kept on purpose
 
-1. Discord interaction received
-2. Voice stream captured from configured speaker
-3. Opus → PCM → WAV conversion (`ffmpeg`)
-4. Transcription (`whisper-cli` + model file)
-5. OpenClaw request (`openclaw agent --json`)
-6. TTS generation (`say`)
-7. Audio playback into Discord voice channel
+- No talk/action modes
+- No Discord UI for session selection
+- No special voice-bridge prompt injected into OpenClaw
+- `/listen` simply sends the transcript as a normal `openclaw agent` turn
 
 ## Requirements
 
-- macOS (currently required because of `say`)
+- macOS with `say`
 - Node.js 20+
 - `ffmpeg`
-- `whisper-cli` (from `whisper-cpp`)
-- OpenClaw CLI (`openclaw`) configured on host
-- Discord bot credentials
+- `whisper-cli`
+- `openclaw`
+- Whisper model at `models/ggml-base.bin`
+- Discord bot credentials for one guild setup
 
-## Quick Start
+At startup the bot checks:
+
+- `DISCORD_TOKEN`
+- `DISCORD_CLIENT_ID`
+- `DISCORD_GUILD_ID`
+- `openclaw`, `ffmpeg`, `whisper-cli`, `say`
+- the Whisper model at `models/ggml-base.bin`
+
+## Quick start
 
 ```bash
 git clone https://github.com/jx-grxf/OpenClaw-Discord-Voice.git
 cd OpenClaw-Discord-Voice
 npm install
 cp .env.example .env
-# fill .env values
 npm run dev
 ```
 
-For full setup details, see:
+More details:
+
 - `docs/INSTALLATION.md`
 - `docs/USAGE.md`
 
-## OpenClaw References
+## Architecture
 
-- Docs: <https://docs.openclaw.ai>
-- GitHub: <https://github.com/openclaw/openclaw>
-- Community: <https://discord.com/invite/clawd>
+1. Receive a Discord slash command
+2. Read audio from the invoking user in the voice channel
+3. Decode Opus to PCM
+4. Convert PCM to WAV with `ffmpeg`
+5. Transcribe WAV with `whisper-cli`
+6. Send the transcript to `openclaw agent --session-id ... --message ... --json`
+7. Generate speech with `say` and play it in Discord
 
-## Repository Layout
+## Notes
 
-```text
-src/index.ts          # Main bot logic
-package.json          # Scripts and dependencies
-tsconfig.json         # TypeScript config
-docs/                 # Installation/usage docs
-```
-
-## Security Notes
-
-- Never commit `.env`
-- Rotate Discord and OpenClaw credentials if leaked
-- Use **Action Mode** only in trusted environments
-- Review `SECURITY.md` before public deployment
-
-## Public Readiness Status
-
-- ✅ `.env` excluded from git
-- ✅ Large model binaries excluded from git (`models/*.bin`)
-- ✅ Setup docs + usage docs added
-- ⚠️ Known limitation: speaker capture uses `DISCORD_USER_ID` targeting
-
-## License
-
-MIT (see `LICENSE`).
+- Session continuity is per Discord user while the bot process stays alive.
+- `/join` prepares the stable session key, but the real OpenClaw session appears only after the first successful `/listen`.
+- End-to-end Discord voice capture is still a manual smoke test; see `docs/USAGE.md`.

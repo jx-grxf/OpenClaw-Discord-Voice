@@ -1,20 +1,21 @@
-# Installation Guide
+# Installation
 
-## 1) System dependencies
+## 1) Install system dependencies
 
 ```bash
 brew install ffmpeg whisper-cpp
 ```
 
-Verify:
+Check them:
 
 ```bash
 which ffmpeg
 which whisper-cli
 which openclaw
+which say
 ```
 
-## 2) Clone and install Node dependencies
+## 2) Clone the repo and install Node dependencies
 
 ```bash
 git clone https://github.com/jx-grxf/OpenClaw-Discord-Voice.git
@@ -22,30 +23,33 @@ cd OpenClaw-Discord-Voice
 npm install
 ```
 
-## 3) Configure environment
+## 3) Configure the environment
 
-Create `.env` from template:
+Create `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-Fill values:
+Set:
 
-- `DISCORD_TOKEN` — bot token
-- `DISCORD_CLIENT_ID` — Discord application ID
-- `DISCORD_GUILD_ID` — target server ID
-- `DISCORD_USER_ID` — currently captured speaker user ID
+- `DISCORD_TOKEN`
+- `DISCORD_CLIENT_ID`
+- `DISCORD_GUILD_ID`
 
-## 4) Download Whisper model
+`DISCORD_USER_ID` is no longer needed. The bridge always captures the user who invoked `/listen`.
 
-Place model at:
+## 4) Place the Whisper model
+
+Path:
 
 ```text
 models/ggml-base.bin
 ```
 
-## 5) Run
+If the file is missing, the bot stops with a clear startup error.
+
+## 5) Start
 
 Development:
 
@@ -53,11 +57,11 @@ Development:
 npm run dev
 ```
 
-Production build:
+Build + start:
 
 ```bash
 npm run build
 npm start
 ```
 
-On startup, guild slash commands are registered automatically.
+The bot registers guild slash commands automatically on startup.

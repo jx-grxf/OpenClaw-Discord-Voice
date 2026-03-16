@@ -8,6 +8,7 @@ import {
   createAudioPlayer,
   createAudioResource,
 } from '@discordjs/voice';
+import { getWhisperModelPath } from './diagnostics.js';
 
 export async function convertPcmToWav(pcmPath: string, wavPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -17,12 +18,22 @@ export async function convertPcmToWav(pcmPath: string, wavPath: string): Promise
   });
 }
 
-export async function transcribeWav(wavPath: string): Promise<string> {
-  const modelPath = path.resolve(process.cwd(), 'models', 'ggml-base.bin');
+export function createRequestTempDir(): string {
+  const root = path.resolve(process.cwd(), 'tmp');
+  fs.mkdirSync(root, { recursive: true });
+  return fs.mkdtempSync(path.join(root, 'listen-'));
+}
+
+export async function removeRequestTempDir(dirPath: string): Promise<void> {
+  await fs.promises.rm(dirPath, { recursive: true, force: true });
+}
+
+export async function transcribeWav(wavPath: string, transcriptBasePath: string): Promise<string> {
+  const modelPath = getWhisperModelPath();
   if (!fs.existsSync(modelPath)) throw new Error(`Whisper model missing: ${modelPath}`);
 
   return await new Promise<string>((resolve, reject) => {
-    const proc = spawn('whisper-cli', ['-m', modelPath, '-f', wavPath, '-l', 'de', '-otxt', '-of', 'tmp/transcript'], {
+    const proc = spawn('whisper-cli', ['-m', modelPath, '-f', wavPath, '-otxt', '-of', transcriptBasePath], {
       cwd: process.cwd(),
     });
 
@@ -31,18 +42,37 @@ export async function transcribeWav(wavPath: string): Promise<string> {
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (code !== 0) return reject(new Error(`whisper-cli exited with code ${code}: ${stderr}`));
-      const txtPath = path.resolve(process.cwd(), 'tmp', 'transcript.txt');
+      const txtPath = `${transcriptBasePath}.txt`;
       if (!fs.existsSync(txtPath)) return resolve('');
       resolve(fs.readFileSync(txtPath, 'utf8').trim());
     });
   });
 }
 
+function getTtsVoice(): string {
+  return process.env.TTS_VOICE?.trim() || 'Flo';
+}
+
+function getTtsRate(): string {
+  const raw = process.env.TTS_RATE?.trim();
+  return raw && /^\d+$/.test(raw) ? raw : '220';
+}
+
 export async function synthesizeWithSay(text: string, outPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn('say', ['-v', 'Anna', '-o', outPath, text]);
+    const proc = spawn('say', ['-v', getTtsVoice(), '-r', getTtsRate(), '-o', outPath, text]);
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
     proc.on('error', reject);
-    proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`say exited with code ${code}`))));
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`say exited with code ${code}: ${stderr || 'no additional details'}`));
+    });
   });
 }
 
@@ -57,4 +87,3 @@ export async function playAudioFile(connection: VoiceConnection, filePath: strin
     player.play(resource);
   });
 }
-

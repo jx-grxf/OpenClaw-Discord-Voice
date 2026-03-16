@@ -1,82 +1,158 @@
 import { spawn } from 'node:child_process';
 
-export async function askOpenClaw(transcript: string, sessionId: string, mode: 'talk' | 'action'): Promise<string> {
-  const t = transcript.trim();
-  if (!t) return 'Ich habe leider nichts verstanden. Versuch es bitte nochmal.';
+type OpenClawPayload = {
+  text?: string | null;
+  content?: string | null;
+};
 
-  const prompt = [
-    'Du bist Claw im Voice-Bridge-Modus.',
-    `Aktueller Modus: ${mode === 'action' ? 'ACTION' : 'TALK'}.`,
-    mode === 'action'
-      ? 'ACTION-Regel: Behandle die nächste Nutzeräußerung als echten Auftrag. Nutze verfügbare Tools, um die Aktion wirklich auszuführen. Behaupte NIEMALS Erfolg ohne Ausführung. Wenn etwas fehlschlägt, sag klar was fehlgeschlagen ist.'
-      : 'TALK-Regel: Nur normal antworten, keine Tools ausführen.',
-    'Antwortstil: Deutsch, natürlich, kurz (max. 2 Sätze), keine Markdown-Formatierung.',
-    '',
-    `Nutzeräußerung: ${t}`,
-  ].join('\n');
+type OpenClawResult = {
+  payloads?: OpenClawPayload[];
+  outputText?: string;
+  text?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  key?: string;
+  meta?: {
+    summaryText?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  };
+};
+
+type OpenClawResponse = {
+  result?: OpenClawResult;
+  summary?: string;
+  text?: string;
+  outputText?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  key?: string;
+  meta?: {
+    sessionId?: string;
+    sessionKey?: string;
+  };
+};
+
+export type OpenClawTurnResult = {
+  reply: string;
+  sessionKey: string;
+  sessionId: string | null;
+};
+
+function firstNonEmpty(values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function parseOpenClawResponse(raw: string): OpenClawResponse | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  try {
+    return JSON.parse(trimmed) as OpenClawResponse;
+  } catch {
+    return null;
+  }
+}
+
+export function extractOpenClawReply(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const data = parseOpenClawResponse(trimmed);
+  if (!data) return trimmed;
+
+  return firstNonEmpty([
+    data.result?.outputText,
+    data.outputText,
+    data.result?.text,
+    data.text,
+    ...(data.result?.payloads ?? []).flatMap((payload) => [payload.text, payload.content]),
+    data.result?.meta?.summaryText,
+    data.summary,
+  ]);
+}
+
+export function extractOpenClawSessionId(raw: string): string | null {
+  const data = parseOpenClawResponse(raw);
+  if (!data) return null;
+
+  return firstNonEmpty([
+    data.result?.sessionId,
+    data.sessionId,
+    data.result?.meta?.sessionId,
+  ]);
+}
+
+export function extractOpenClawSessionKey(raw: string): string | null {
+  const data = parseOpenClawResponse(raw);
+  if (!data) return null;
+
+  return firstNonEmpty([
+    data.result?.sessionKey,
+    data.sessionKey,
+    data.key,
+    data.result?.key,
+    data.result?.meta?.sessionKey,
+  ]);
+}
+
+function formatCliError(stderr: string, code: number | null): string {
+  const detail = stderr.trim() || 'no additional details';
+  return `OpenClaw CLI failed (exit ${code ?? 'unknown'}): ${detail}`;
+}
+
+export async function askOpenClaw(transcript: string, sessionKey: string): Promise<OpenClawTurnResult> {
+  const message = transcript.trim();
+  if (!message) {
+    return {
+      reply: 'I could not understand anything yet. Please try again.',
+      sessionKey,
+      sessionId: null,
+    };
+  }
 
   const raw = await new Promise<string>((resolve, reject) => {
     const proc = spawn('openclaw', [
       'agent',
       '--session-id',
-      sessionId,
+      sessionKey,
       '--thinking',
       'off',
       '--message',
-      prompt,
+      message,
       '--json',
     ]);
 
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => (stdout += d.toString()));
-    proc.stderr.on('data', (d) => (stderr += d.toString()));
-    proc.on('error', reject);
+
+    proc.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on('error', (error) => reject(new Error(`Could not start OpenClaw: ${error.message}`)));
     proc.on('close', (code) => {
-      if (code !== 0) return reject(new Error(`openclaw agent exited with code ${code}: ${stderr}`));
+      if (code !== 0) {
+        reject(new Error(formatCliError(stderr || stdout, code)));
+        return;
+      }
       resolve(stdout);
     });
   });
 
-  try {
-    const data = JSON.parse(raw) as {
-      result?: { payloads?: Array<{ text?: string | null }>; meta?: { summaryText?: string } };
-      summary?: string;
-    };
-
-    const text = data?.result?.payloads?.find((p) => (p.text ?? '').trim().length > 0)?.text?.trim();
-    if (text) return text;
-
-    const fallback = data?.result?.meta?.summaryText || data?.summary;
-    if (fallback?.trim()) return fallback.trim();
-    return 'Ich habe gerade keine gute Antwort bekommen. Versuch es bitte nochmal.';
-  } catch {
-    return 'Antwort konnte nicht geparst werden. Versuch es bitte nochmal.';
+  const reply = extractOpenClawReply(raw);
+  if (!reply) {
+    throw new Error('OpenClaw returned no usable reply.');
   }
-}
 
-export async function listOpenClawSessions(): Promise<Array<{ sessionId: string; key: string; kind: string; ageMs: number }>> {
-  const raw = await new Promise<string>((resolve, reject) => {
-    const proc = spawn('openclaw', ['sessions', '--json']);
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout.on('data', (d) => (stdout += d.toString()));
-    proc.stderr.on('data', (d) => (stderr += d.toString()));
-    proc.on('error', reject);
-    proc.on('close', (code) => {
-      if (code !== 0) return reject(new Error(`openclaw sessions failed (${code}): ${stderr}`));
-      resolve(stdout);
-    });
-  });
-
-  const parsed = JSON.parse(raw) as {
-    sessions?: Array<{ sessionId?: string; key?: string; kind?: string; ageMs?: number }>;
+  return {
+    reply,
+    sessionKey: extractOpenClawSessionKey(raw) ?? sessionKey,
+    sessionId: extractOpenClawSessionId(raw),
   };
-
-  return (parsed.sessions ?? [])
-    .filter((s) => !!s.sessionId && !!s.key)
-    .map((s) => ({ sessionId: s.sessionId!, key: s.key!, kind: s.kind ?? 'unknown', ageMs: s.ageMs ?? 0 }))
-    .sort((a, b) => a.ageMs - b.ageMs);
 }
-

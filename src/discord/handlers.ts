@@ -1,221 +1,115 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import prism from 'prism-media';
 import { EndBehaviorType, getVoiceConnection } from '@discordjs/voice';
+import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonInteraction,
-  ButtonStyle,
-  ChatInputCommandInteraction,
-  EmbedBuilder,
-  MessageFlags,
-  StringSelectMenuBuilder,
-  StringSelectMenuInteraction,
-} from 'discord.js';
-import { askOpenClaw, listOpenClawSessions } from '../openclaw';
-import { convertPcmToWav, playAudioFile, synthesizeWithSay, transcribeWav } from '../audio';
-import { getOrCreateConnectionFromMember } from '../voice';
-import { activeModeByUser, activeSessionByUser, sessionChoiceMapByUser } from '../state';
-import { formatAge, truncate } from '../utils';
+  convertPcmToWav,
+  createRequestTempDir,
+  playAudioFile,
+  removeRequestTempDir,
+  synthesizeWithSay,
+  transcribeWav,
+} from '../audio.js';
+import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
+import { askOpenClaw } from '../openclaw.js';
+import { getOrCreateVoiceSession, getVoiceSession, markVoiceSessionUsed } from '../state.js';
+import { getOrCreateConnectionFromMember } from '../voice.js';
 
-export async function handleJoinChoice(interaction: ChatInputCommandInteraction) {
-  const embed = new EmbedBuilder()
-    .setTitle('🎧 Voice Session wählen')
-    .setDescription('Willst du eine **neue OpenClaw Session** starten oder eine **bestehende** fortsetzen?')
-    .setColor(0x5865f2);
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`join_new:${interaction.user.id}`)
-      .setLabel('🆕 New Session')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`join_existing:${interaction.user.id}`)
-      .setLabel('📂 Bestehende Session')
-      .setStyle(ButtonStyle.Primary),
-  );
-
-  await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
+function formatPipelineError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  return 'Unknown voice bridge error.';
 }
 
-export async function handleJoinButtons(interaction: ButtonInteraction) {
-  if (!interaction.customId.startsWith('join_')) return;
+function formatSessionStatus(userId: string): string {
+  const session = getVoiceSession(userId);
+  if (!session) return 'No voice session has been prepared for you yet.';
 
-  const parts = interaction.customId.split(':');
-  const action = parts[0];
-  const ownerId = parts[1];
-  const mode = action.replace('join_', '');
+  if (!session.initializedAt) {
+    return [`Prepared key: \`${session.sessionKey}\``, 'A real OpenClaw session will appear after your first successful `/listen`.'].join(
+      '\n',
+    );
+  }
 
-  if (ownerId !== interaction.user.id) {
-    await interaction.reply({ content: 'Diese Auswahl gehört nicht dir.', flags: MessageFlags.Ephemeral });
+  const details = [`OpenClaw key: \`${session.sessionKey}\``];
+  if (session.openClawSessionId) {
+    details.push(`OpenClaw session id: \`${session.openClawSessionId}\``);
+  }
+  return details.join('\n');
+}
+
+export function resolveReceiveUserId(interactionUserId: string, configuredUserId?: string | null): string {
+  const configured = configuredUserId?.trim();
+  return configured || interactionUserId;
+}
+
+export async function handleJoin(interaction: ChatInputCommandInteraction) {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: 'This command only works inside a server.', flags: MessageFlags.Ephemeral });
     return;
   }
 
-  if (mode === 'new') {
-    const sessionId = randomUUID();
-    activeSessionByUser.set(interaction.user.id, sessionId);
+  const connection = await getOrCreateConnectionFromMember(interaction);
+  if (!connection) return;
 
-    const connection = await getOrCreateConnectionFromMember(interaction);
-    if (!connection) return;
+  const { session, created } = getOrCreateVoiceSession(guildId, interaction.user.id);
+  const health = collectBridgeHealth();
+  const issues = summarizeHealthIssues(health);
 
-    const embed = new EmbedBuilder()
-      .setTitle('🛠️ Modus wählen')
-      .setDescription('Soll ich nur reden oder auch Aktionen auf deinem Mac ausführen dürfen?')
-      .setColor(0x5865f2);
-
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`mode_talk:${interaction.user.id}:${sessionId}`)
-        .setLabel('💬 Talk Mode')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`mode_action:${interaction.user.id}:${sessionId}`)
-        .setLabel('⚡ Action Mode')
-        .setStyle(ButtonStyle.Danger),
+  const embed = new EmbedBuilder()
+    .setTitle('Voice bridge ready')
+    .setColor(issues.length ? 0xfee75c : 0x57f287)
+    .setDescription(
+      [
+        `Connected to your voice channel. ${created ? 'Prepared' : 'Reusing'} your voice session key.`,
+        `OpenClaw key: \`${session.sessionKey}\``,
+        session.initializedAt
+          ? 'This key already maps to a real OpenClaw session.'
+          : 'The real OpenClaw session will be created on your first successful `/listen` turn.',
+        'Use `/listen` for one spoken turn.',
+      ].join('\n'),
     );
 
-    await interaction.update({ embeds: [embed], components: [row] });
-    return;
+  if (issues.length) {
+    embed.addFields({
+      name: 'Warnings',
+      value: issues.map((issue) => `- ${issue}`).join('\n').slice(0, 1024),
+    });
   }
 
-  if (mode === 'existing') {
-    await interaction.update({
-      embeds: [new EmbedBuilder().setTitle('⏳ Lade Sessions…').setColor(0x5865f2)],
-      components: [],
-    });
-
-    const sessions = await listOpenClawSessions();
-    if (!sessions.length) {
-      await interaction.editReply({ content: 'Keine Sessions gefunden.', embeds: [], components: [] });
-      return;
-    }
-
-    const uniqueBySession = new Map<string, { sessionId: string; key: string; kind: string; ageMs: number }>();
-    for (const s of sessions) {
-      const existing = uniqueBySession.get(s.sessionId);
-      if (!existing || s.ageMs < existing.ageMs) uniqueBySession.set(s.sessionId, s);
-    }
-
-    const picked = Array.from(uniqueBySession.values()).slice(0, 25);
-    const choiceMap = new Map<string, string>();
-    const options = picked.map((s, i) => {
-      const value = `s${i}`;
-      choiceMap.set(value, s.sessionId);
-      return {
-        label: truncate(s.sessionId, 100),
-        description: `${s.kind} • ${formatAge(s.ageMs)} • ${truncate(s.key, 50)}`.slice(0, 100),
-        value,
-      };
-    });
-    sessionChoiceMapByUser.set(interaction.user.id, choiceMap);
-
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(`join_pick_session:${interaction.user.id}`)
-      .setPlaceholder('Session auswählen…')
-      .addOptions(options);
-
-    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
-    const embed = new EmbedBuilder()
-      .setTitle('📂 Bestehende Session auswählen')
-      .setDescription('Wähle eine Session aus der Liste, dann join ich den Voice Channel.')
-      .setColor(0x5865f2);
-
-    await interaction.editReply({ embeds: [embed], components: [row] });
-  }
+  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 }
 
-export async function handleSessionPick(interaction: StringSelectMenuInteraction) {
-  const [, ownerId] = interaction.customId.split(':');
-  if (ownerId !== interaction.user.id) {
-    await interaction.reply({ content: 'Diese Auswahl gehört nicht dir.', flags: MessageFlags.Ephemeral });
+export async function handleListen(interaction: ChatInputCommandInteraction, configuredReceiveUserId?: string | null) {
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.guild) {
+    await interaction.editReply({ content: 'This command only works inside a server.' });
     return;
   }
-
-  await interaction.update({
-    embeds: [new EmbedBuilder().setTitle('⏳ Verbinde Session…').setColor(0x5865f2)],
-    components: [],
-  });
-
-  const selectedValue = interaction.values[0];
-  const choiceMap = sessionChoiceMapByUser.get(interaction.user.id);
-  const pickedSessionId = choiceMap?.get(selectedValue);
-  if (!pickedSessionId) {
-    await interaction.editReply({ content: 'Session-Auswahl abgelaufen. Bitte /join neu starten.', embeds: [], components: [] });
-    return;
-  }
-
-  activeSessionByUser.set(interaction.user.id, pickedSessionId);
-  sessionChoiceMapByUser.delete(interaction.user.id);
 
   const connection = await getOrCreateConnectionFromMember(interaction);
   if (!connection) return;
 
-  const embed = new EmbedBuilder()
-    .setTitle('🛠️ Modus wählen')
-    .setDescription('Soll ich nur reden oder auch Aktionen auf deinem Mac ausführen dürfen?')
-    .setColor(0x5865f2);
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`mode_talk:${interaction.user.id}:${pickedSessionId}`)
-      .setLabel('💬 Talk Mode')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`mode_action:${interaction.user.id}:${pickedSessionId}`)
-      .setLabel('⚡ Action Mode')
-      .setStyle(ButtonStyle.Danger),
+  const { session } = getOrCreateVoiceSession(guildId, interaction.user.id);
+  const receiveUserId = resolveReceiveUserId(interaction.user.id, configuredReceiveUserId);
+  const usingConfiguredReceiveUser = receiveUserId !== interaction.user.id;
+  await interaction.editReply(
+    `Listening now. Speak a short sentence. I will stop after about 1.2s of silence.\nOpenClaw key: \`${session.sessionKey}\``,
   );
 
-  await interaction.editReply({ embeds: [embed], components: [row] });
-}
-
-export async function handleModeButtons(interaction: ButtonInteraction) {
-  const [action, ownerId, sessionId] = interaction.customId.split(':');
-  const mode = action.replace('mode_', '');
-
-  if (!sessionId) {
-    await interaction.reply({ content: 'Session fehlt in der Auswahl.', flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  if (ownerId !== interaction.user.id) {
-    await interaction.reply({ content: 'Diese Auswahl gehört nicht dir.', flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  if (mode !== 'talk' && mode !== 'action') {
-    await interaction.reply({ content: 'Unbekannter Modus.', flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  activeSessionByUser.set(interaction.user.id, sessionId);
-  activeModeByUser.set(interaction.user.id, mode);
-
-  const embed = new EmbedBuilder()
-    .setTitle('✅ Voice bereit')
-    .setDescription(
-      `Session-ID: \`${sessionId}\`\nModus: **${mode === 'action' ? 'Action (darf Tools nutzen)' : 'Talk (nur reden)'}**\n\nNutze jetzt \`/listen\`.`,
-    )
-    .setColor(0x57f287);
-
-  await interaction.update({ embeds: [embed], components: [] });
-}
-
-export async function handleListen(interaction: ChatInputCommandInteraction, discordUserId: string) {
-  if (!interaction.guild) {
-    await interaction.editReply({ content: 'Nur im Server nutzbar.' });
-    return;
-  }
-
-  const connection = await getOrCreateConnectionFromMember(interaction);
-  if (!connection) return;
-
-  await interaction.editReply('🎙️ Sage jetzt einen kurzen Satz… (stoppt nach ~1.2s Stille)');
+  const botMember = await interaction.guild.members.fetchMe();
+  const receiveMember = await interaction.guild.members.fetch(receiveUserId).catch(() => null);
 
   const receiver = connection.receiver;
-  const opusStream = receiver.subscribe(discordUserId, {
+  const tmpDir = createRequestTempDir();
+  const requestId = path.basename(tmpDir);
+  const logPrefix = `[listen:${requestId}]`;
+  const log = (message: string, details?: Record<string, unknown>) => {
+    console.log(logPrefix, message, details ?? {});
+  };
+
+  const opusStream = receiver.subscribe(receiveUserId, {
     end: {
       behavior: EndBehaviorType.AfterSilence,
       duration: 1200,
@@ -225,77 +119,297 @@ export async function handleListen(interaction: ChatInputCommandInteraction, dis
   let decoder: prism.opus.Decoder;
   try {
     decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 });
-  } catch (err) {
-    console.error('Opus decoder init failed:', err);
+  } catch (error) {
+    console.error(logPrefix, 'Opus decoder init failed', error);
     await interaction.followUp({
-      content: '❌ Opus decoder fehlt. Installiere `opusscript` (oder `@discordjs/opus`) und starte neu.',
+      content: 'Opus decoding is unavailable. Install `opusscript` or `@discordjs/opus`, then restart the bot.',
       flags: MessageFlags.Ephemeral,
     });
+    await removeRequestTempDir(tmpDir);
     return;
   }
 
-  const tmpDir = path.resolve(process.cwd(), 'tmp');
-  fs.mkdirSync(tmpDir, { recursive: true });
   const pcmPath = path.join(tmpDir, 'input.pcm');
   const wavPath = path.join(tmpDir, 'input.wav');
+  const transcriptBasePath = path.join(tmpDir, 'transcript');
   const ttsPath = path.join(tmpDir, 'reply.aiff');
-
   const out = fs.createWriteStream(pcmPath);
-  opusStream.pipe(decoder).pipe(out);
 
-  opusStream.on('error', async (err) => {
-    console.error('Opus stream error:', err);
-    await interaction.followUp({ content: '❌ Fehler beim Audio-Stream.', flags: MessageFlags.Ephemeral });
+  let completed = false;
+  let receivedOpusPackets = 0;
+  let receivedOpusBytes = 0;
+  let receivedPcmBytes = 0;
+  let speakingStarted = false;
+  let ssrcMapped = false;
+
+  const onSpeakingStart = (userId: string) => {
+    if (userId !== receiveUserId) return;
+    speakingStarted = true;
+    log('Speaking started', { userId });
+  };
+
+  const onSpeakingEnd = (userId: string) => {
+    if (userId !== receiveUserId) return;
+    log('Speaking ended', { userId, opusPackets: receivedOpusPackets, pcmBytes: receivedPcmBytes });
+  };
+
+  const onSsrcCreate = (data: { userId: string; audioSSRC: number }) => {
+    if (data.userId !== receiveUserId) return;
+    ssrcMapped = true;
+    log('SSRC mapped', { userId: data.userId, audioSSRC: data.audioSSRC });
+  };
+
+  receiver.speaking.on('start', onSpeakingStart);
+  receiver.speaking.on('end', onSpeakingEnd);
+  receiver.ssrcMap.on('create', onSsrcCreate);
+
+  const cleanupListeners = () => {
+    receiver.speaking.off('start', onSpeakingStart);
+    receiver.speaking.off('end', onSpeakingEnd);
+    receiver.ssrcMap.off('create', onSsrcCreate);
+  };
+
+  const finishWithError = async (message: string) => {
+    if (completed) return;
+    completed = true;
+    clearTimeout(noAudioTimer);
+    cleanupListeners();
+    try {
+      opusStream.destroy();
+    } catch {}
+    if (!out.destroyed) {
+      out.destroy();
+    }
+    await interaction.followUp({ content: message, flags: MessageFlags.Ephemeral });
+    await removeRequestTempDir(tmpDir);
+  };
+
+  const noAudioTimer = setTimeout(async () => {
+    if (completed || receivedOpusPackets > 0) return;
+    console.warn(logPrefix, 'No audio received before timeout', {
+      guildId: interaction.guild?.id,
+      interactionUserId: interaction.user.id,
+      receiveUserId,
+      configuredReceiveUserId: configuredReceiveUserId ?? null,
+      speakingStarted,
+      ssrcMapped,
+    });
+    await finishWithError(
+      'I did not receive any voice signal from you. Check that Discord voice activity or push-to-talk is actually sending audio, then try `/listen` again.',
+    );
+  }, 12_000);
+
+  log('Receive pipeline started', {
+    guildId: interaction.guild.id,
+    channelId: connection.joinConfig.channelId,
+    interactionUserId: interaction.user.id,
+    receiveUserId,
+    configuredReceiveUserId: configuredReceiveUserId ?? null,
+    sessionKey: session.sessionKey,
+    botVoiceState: botMember.voice ? {
+      channelId: botMember.voice.channelId,
+      selfMute: botMember.voice.selfMute,
+      selfDeaf: botMember.voice.selfDeaf,
+      serverMute: botMember.voice.serverMute,
+      serverDeaf: botMember.voice.serverDeaf,
+      suppress: botMember.voice.suppress,
+    } : null,
+    receiveMemberVoiceState: receiveMember?.voice ? {
+      channelId: receiveMember.voice.channelId,
+      selfMute: receiveMember.voice.selfMute,
+      selfDeaf: receiveMember.voice.selfDeaf,
+      serverMute: receiveMember.voice.serverMute,
+      serverDeaf: receiveMember.voice.serverDeaf,
+      suppress: receiveMember.voice.suppress,
+    } : null,
   });
 
-  out.on('finish', async () => {
-    try {
-      await convertPcmToWav(pcmPath, wavPath);
-      const transcript = await transcribeWav(wavPath);
-      let sessionId = activeSessionByUser.get(interaction.user.id);
-      if (!sessionId) {
-        sessionId = randomUUID();
-        activeSessionByUser.set(interaction.user.id, sessionId);
-      }
-      const mode = activeModeByUser.get(interaction.user.id) ?? 'talk';
-      const replyText = await askOpenClaw(transcript, sessionId, mode);
+  if (usingConfiguredReceiveUser) {
+    log('Using configured Discord receive target override', {
+      interactionUserId: interaction.user.id,
+      receiveUserId,
+    });
+  }
 
-      await synthesizeWithSay(replyText, ttsPath);
-      await playAudioFile(connection, ttsPath);
-
-      await interaction.followUp(`📝 Du hast gesagt: **${transcript || '(nichts erkannt)'}**\n🤖 Antwort: **${replyText}**`);
-    } catch (err) {
-      console.error('Listen pipeline failed:', err);
-      await interaction.followUp({
-        content: '⚠️ Aufnahme ok, aber Verarbeitung fehlgeschlagen. Check Logs.',
-        flags: MessageFlags.Ephemeral,
+  opusStream.on('data', (chunk) => {
+    receivedOpusPackets += 1;
+    receivedOpusBytes += chunk.length;
+    if (receivedOpusPackets === 1) {
+      clearTimeout(noAudioTimer);
+      log('First opus packet received', {
+        bytes: chunk.length,
+        speakingStarted,
+        ssrcMapped,
+      });
+    } else if (receivedOpusPackets % 50 === 0) {
+      log('Still receiving opus packets', {
+        opusPackets: receivedOpusPackets,
+        opusBytes: receivedOpusBytes,
       });
     }
   });
 
-  out.on('error', async (err) => {
-    console.error('Write stream error:', err);
-    await interaction.followUp({ content: '❌ Fehler beim Speichern der Aufnahme.', flags: MessageFlags.Ephemeral });
+  decoder.on('data', (chunk: Buffer) => {
+    receivedPcmBytes += chunk.length;
   });
+
+  opusStream.on('end', () => {
+    log('Opus stream ended', {
+      opusPackets: receivedOpusPackets,
+      opusBytes: receivedOpusBytes,
+      pcmBytes: receivedPcmBytes,
+    });
+  });
+
+  opusStream.on('close', () => {
+    log('Opus stream closed');
+  });
+
+  opusStream.on('error', async (error) => {
+    console.error(logPrefix, 'Opus stream error', error);
+    await finishWithError('The Discord receive stream failed while listening.');
+  });
+
+  decoder.on('error', async (error) => {
+    console.error(logPrefix, 'Decoder error', error);
+    await finishWithError('The audio decoder failed while processing your speech.');
+  });
+
+  out.on('error', async (error) => {
+    console.error(logPrefix, 'Write stream error', error);
+    if (!receivedOpusPackets) {
+      await finishWithError('I could not capture usable audio. Check your mic and Discord voice settings, then try again.');
+      return;
+    }
+    await finishWithError('Saving the captured audio failed.');
+  });
+
+  out.on('finish', async () => {
+    if (completed) return;
+
+    log('PCM file complete', {
+      opusPackets: receivedOpusPackets,
+      opusBytes: receivedOpusBytes,
+      pcmBytes: receivedPcmBytes,
+      pcmPath,
+    });
+
+    if (!receivedOpusPackets || receivedPcmBytes === 0) {
+      await finishWithError(
+        'I still did not receive decodable speech audio. Check Discord voice activity, your input device, and whether you spoke after `/listen` started.',
+      );
+      return;
+    }
+
+    try {
+      await convertPcmToWav(pcmPath, wavPath);
+      log('Converted PCM to WAV', { wavPath });
+
+      const transcript = await transcribeWav(wavPath, transcriptBasePath);
+      log('Transcription finished', { transcriptLength: transcript.length });
+      if (!transcript.trim()) {
+        throw new Error('Audio arrived, but Whisper could not recognize any speech. Try speaking more clearly or a little louder.');
+      }
+
+      const openClawResult = await askOpenClaw(transcript, session.sessionKey);
+      markVoiceSessionUsed(interaction.user.id, {
+        initialized: true,
+        sessionKey: openClawResult.sessionKey,
+        openClawSessionId: openClawResult.sessionId,
+      });
+      log('OpenClaw turn finished', {
+        sessionKey: openClawResult.sessionKey,
+        sessionId: openClawResult.sessionId,
+      });
+
+      await synthesizeWithSay(openClawResult.reply, ttsPath);
+      log('TTS synthesis finished', { ttsPath });
+      await playAudioFile(connection, ttsPath);
+      log('Reply playback finished');
+
+      completed = true;
+      clearTimeout(noAudioTimer);
+      cleanupListeners();
+      await interaction.followUp(
+        [
+          `You said: **${transcript}**`,
+          `OpenClaw replied: **${openClawResult.reply}**`,
+          `OpenClaw key: \`${openClawResult.sessionKey}\``,
+          openClawResult.sessionId ? `OpenClaw session id: \`${openClawResult.sessionId}\`` : null,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    } catch (error) {
+      console.error(logPrefix, 'Listen pipeline failed', error);
+      completed = true;
+      clearTimeout(noAudioTimer);
+      cleanupListeners();
+      await interaction.followUp({
+        content: `Processing failed: ${formatPipelineError(error)}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } finally {
+      await removeRequestTempDir(tmpDir);
+    }
+  });
+
+  opusStream.pipe(decoder).pipe(out);
 }
 
 export async function handleLeave(interaction: ChatInputCommandInteraction) {
   if (!interaction.guild) {
-    await interaction.editReply({ content: 'Nur im Server nutzbar.' });
+    await interaction.editReply({ content: 'This command only works inside a server.' });
     return;
   }
 
   const connection = getVoiceConnection(interaction.guild.id);
   if (!connection) {
-    await interaction.editReply({ content: 'Ich bin aktuell in keinem Voice Channel.' });
+    await interaction.editReply({ content: 'I am not connected to a voice channel right now.' });
     return;
   }
 
   connection.destroy();
-  await interaction.editReply('👋 Voice Channel verlassen');
+  await interaction.editReply('Left the voice channel.');
 }
 
 export async function handleInfo(interaction: ChatInputCommandInteraction) {
-  await interaction.editReply('This is a temporary test');
-}
+  const health = collectBridgeHealth();
+  const issues = summarizeHealthIssues(health);
+  const connection = interaction.guild ? getVoiceConnection(interaction.guild.id) : null;
 
+  const embed = new EmbedBuilder()
+    .setTitle('Bridge status')
+    .setColor(issues.length ? 0xed4245 : 0x57f287)
+    .addFields(
+      {
+        name: 'Voice',
+        value: connection ? `Connected to guild ${connection.joinConfig.guildId}` : 'Not connected',
+      },
+      {
+        name: 'Session',
+        value: formatSessionStatus(interaction.user.id),
+      },
+      {
+        name: 'Env',
+        value: health.env.map((item) => `${item.ok ? 'OK' : 'MISSING'} ${item.name}`).join('\n'),
+      },
+      {
+        name: 'Binaries',
+        value: health.binaries.map((item) => `${item.ok ? 'OK' : 'MISSING'} ${item.name}`).join('\n'),
+      },
+      {
+        name: 'Whisper',
+        value: `${health.whisperModel.ok ? 'OK' : 'MISSING'} ${health.whisperModel.detail}`,
+      },
+    );
+
+  if (issues.length) {
+    embed.addFields({
+      name: 'Issues',
+      value: issues.map((issue) => `- ${issue}`).join('\n').slice(0, 1024),
+    });
+  }
+
+  await interaction.editReply({ embeds: [embed] });
+}

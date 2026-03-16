@@ -26,7 +26,7 @@ function formatSessionStatus(userId: string): string {
   if (!session) return 'No voice session has been prepared for you yet.';
 
   if (!session.initializedAt) {
-    return [`Prepared key: \`${session.sessionKey}\``, 'A real OpenClaw session will appear after your first successful `/listen`.'].join(
+    return [`Prepared key: \`${session.sessionKey}\``, 'OpenClaw will only be exercised after your first successful `/listen` turn.'].join(
       '\n',
     );
   }
@@ -36,11 +36,6 @@ function formatSessionStatus(userId: string): string {
     details.push(`OpenClaw session id: \`${session.openClawSessionId}\``);
   }
   return details.join('\n');
-}
-
-export function resolveReceiveUserId(interactionUserId: string, configuredUserId?: string | null): string {
-  const configured = configuredUserId?.trim();
-  return configured || interactionUserId;
 }
 
 export async function handleJoin(interaction: ChatInputCommandInteraction) {
@@ -65,8 +60,8 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
         `Connected to your voice channel. ${created ? 'Prepared' : 'Reusing'} your voice session key.`,
         `OpenClaw key: \`${session.sessionKey}\``,
         session.initializedAt
-          ? 'This key already maps to a real OpenClaw session.'
-          : 'The real OpenClaw session will be created on your first successful `/listen` turn.',
+          ? 'This key has already been used successfully with OpenClaw in this bot process.'
+          : 'OpenClaw will only be exercised on your first successful `/listen` turn.',
         'Use `/listen` for one spoken turn.',
       ].join('\n'),
     );
@@ -81,7 +76,7 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
   await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 }
 
-export async function handleListen(interaction: ChatInputCommandInteraction, configuredReceiveUserId?: string | null) {
+export async function handleListen(interaction: ChatInputCommandInteraction) {
   const guildId = interaction.guildId;
   if (!guildId || !interaction.guild) {
     await interaction.editReply({ content: 'This command only works inside a server.' });
@@ -92,8 +87,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction, con
   if (!connection) return;
 
   const { session } = getOrCreateVoiceSession(guildId, interaction.user.id);
-  const receiveUserId = resolveReceiveUserId(interaction.user.id, configuredReceiveUserId);
-  const usingConfiguredReceiveUser = receiveUserId !== interaction.user.id;
+  const receiveUserId = interaction.user.id;
   await interaction.editReply(
     `Listening now. Speak a short sentence. I will stop after about 1.2s of silence.\nOpenClaw key: \`${session.sessionKey}\``,
   );
@@ -190,7 +184,6 @@ export async function handleListen(interaction: ChatInputCommandInteraction, con
       guildId: interaction.guild?.id,
       interactionUserId: interaction.user.id,
       receiveUserId,
-      configuredReceiveUserId: configuredReceiveUserId ?? null,
       speakingStarted,
       ssrcMapped,
     });
@@ -204,7 +197,6 @@ export async function handleListen(interaction: ChatInputCommandInteraction, con
     channelId: connection.joinConfig.channelId,
     interactionUserId: interaction.user.id,
     receiveUserId,
-    configuredReceiveUserId: configuredReceiveUserId ?? null,
     sessionKey: session.sessionKey,
     botVoiceState: botMember.voice ? {
       channelId: botMember.voice.channelId,
@@ -223,13 +215,6 @@ export async function handleListen(interaction: ChatInputCommandInteraction, con
       suppress: receiveMember.voice.suppress,
     } : null,
   });
-
-  if (usingConfiguredReceiveUser) {
-    log('Using configured Discord receive target override', {
-      interactionUserId: interaction.user.id,
-      receiveUserId,
-    });
-  }
 
   opusStream.on('data', (chunk) => {
     receivedOpusPackets += 1;

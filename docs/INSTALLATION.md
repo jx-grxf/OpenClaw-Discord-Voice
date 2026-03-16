@@ -15,6 +15,10 @@ which openclaw
 which say
 ```
 
+`openclaw` must already be installed and working locally.
+
+This project currently assumes macOS because reply audio is generated with `say`. Linux and Windows are not documented or supported as-is.
+
 ## 2) Clone the repo and install Node dependencies
 
 ```bash
@@ -37,7 +41,10 @@ Set:
 - `DISCORD_CLIENT_ID`
 - `DISCORD_GUILD_ID`
 
-`DISCORD_USER_ID` is no longer needed. The bridge always captures the user who invoked `/listen`.
+Optional:
+
+- `TTS_VOICE` to choose the macOS `say` voice. Default: `Flo`
+- `TTS_RATE` to set the macOS `say` speaking rate. Default: `220`
 
 ## 4) Place the Whisper model
 
@@ -65,3 +72,9 @@ npm start
 ```
 
 The bot registers guild slash commands automatically on startup.
+
+## Known setup caveats
+
+- Successful startup only confirms the expected env vars, binaries, and Whisper model are present.
+- It does not prove Discord voice receive will work in your runtime environment.
+- Real verification still requires a manual smoke test in a Discord voice channel; see `docs/USAGE.md`.

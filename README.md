@@ -1,25 +1,25 @@
 # OpenClaw Discord Voice Bridge
 
-Simple Discord voice bridge for OpenClaw.
+Experimental, self-hosted Discord voice bridge for OpenClaw.
 
-The bot joins your voice channel, captures one spoken turn from the user who invoked `/listen`, transcribes it locally with Whisper, sends the transcript to OpenClaw through a real CLI session, and plays the reply back in the channel.
+This bot joins a Discord voice channel, captures one spoken turn from the user who invoked `/listen`, transcribes it locally with Whisper, sends the transcript to a local `openclaw` CLI session, and plays the reply back with macOS `say`.
 
-Each Discord user gets a stable voice session key. The real OpenClaw session is created on the first successful `/listen` turn and then reused for later turns.
+It is designed for personal or small trusted setups, not as a polished hosted service.
 
-## Commands
+## What it does
 
-- `/ping` - simple health check
-- `/join` - join your current voice channel and prepare your voice session key
-- `/listen` - capture one spoken turn, send it to OpenClaw, and play the reply
-- `/leave` - disconnect the bot from voice
-- `/info` - show bridge status, session status, and dependency health
+- `/join` connects to your current voice channel and prepares a deterministic OpenClaw session key
+- `/listen` captures one spoken turn from the invoking user, sends it to OpenClaw, and plays one spoken reply
+- `/leave` disconnects the bot from voice
+- `/info` shows dependency health and current in-memory session status
+- `/ping` provides a simple health check
 
-## Simplifications kept on purpose
+## Scope
 
-- No talk/action modes
-- No Discord UI for session selection
-- No special voice-bridge prompt injected into OpenClaw
-- `/listen` simply sends the transcript as a normal `openclaw agent` turn
+- Self-hosted only
+- Environment-sensitive: depends on local binaries, PATH, voice state, and Discord runtime conditions
+- Text-to-speech is macOS-only in the current implementation because playback is generated with `say`
+- End-to-end voice receive still needs manual smoke testing in a real Discord voice channel
 
 ## Requirements
 
@@ -29,7 +29,7 @@ Each Discord user gets a stable voice session key. The real OpenClaw session is 
 - `whisper-cli`
 - `openclaw`
 - Whisper model at `models/ggml-base.bin`
-- Discord bot credentials for one guild setup
+- Discord bot credentials for a single guild setup
 
 At startup the bot checks:
 
@@ -38,6 +38,19 @@ At startup the bot checks:
 - `DISCORD_GUILD_ID`
 - `openclaw`, `ffmpeg`, `whisper-cli`, `say`
 - the Whisper model at `models/ggml-base.bin`
+
+## Configuration
+
+Required environment variables:
+
+- `DISCORD_TOKEN`
+- `DISCORD_CLIENT_ID`
+- `DISCORD_GUILD_ID`
+
+Optional text-to-speech settings:
+
+- `TTS_VOICE`: macOS `say` voice name, default `Flo`
+- `TTS_RATE`: macOS `say` speaking rate, default `220`
 
 ## Quick start
 
@@ -64,8 +77,17 @@ More details:
 6. Send the transcript to `openclaw agent --session-id ... --message ... --json`
 7. Generate speech with `say` and play it in Discord
 
-## Notes
+## Session behavior
 
-- Session continuity is per Discord user while the bot process stays alive.
-- `/join` prepares the stable session key, but the real OpenClaw session appears only after the first successful `/listen`.
-- End-to-end Discord voice capture is still a manual smoke test; see `docs/USAGE.md`.
+- The bridge keeps per-user session state in memory while the bot process is running.
+- `/join` prepares a deterministic session key, but does not itself create a visible OpenClaw session.
+- The first successful `/listen` turn is what actually exercises the OpenClaw CLI with that key.
+- If OpenClaw returns a session id, the bot stores and shows it in `/info`.
+- Whether that session appears in `openclaw sessions` is determined by the local OpenClaw runtime, not guaranteed by this bridge alone.
+
+## Known limitations
+
+- macOS only for TTS in the current version because it shells out to `say`
+- Discord voice receive is sensitive to real runtime conditions such as who is speaking, mute/deafen state, push-to-talk or voice activity, and channel permissions
+- Session continuity depends on the local OpenClaw runtime and what it returns; this repo does not manage or persist OpenClaw sessions itself
+- End-to-end validation is still primarily a manual smoke test in a live Discord voice channel

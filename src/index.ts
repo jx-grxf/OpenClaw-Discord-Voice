@@ -15,7 +15,6 @@ function requireEnv(name: string): string {
 const DISCORD_TOKEN = requireEnv('DISCORD_TOKEN');
 const DISCORD_CLIENT_ID = requireEnv('DISCORD_CLIENT_ID');
 const DISCORD_GUILD_ID = requireEnv('DISCORD_GUILD_ID');
-const DISCORD_USER_ID = process.env.DISCORD_USER_ID?.trim() || null;
 assertStartupReadiness(process.env);
 
 const commands = [
@@ -64,7 +63,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (interaction.commandName === 'listen') {
-        await handleListen(interaction, DISCORD_USER_ID);
+        await handleListen(interaction);
         return;
       }
 

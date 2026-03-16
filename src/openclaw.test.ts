@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractOpenClawReply, extractOpenClawSessionId, extractOpenClawSessionKey } from './openclaw.js';
+import {
+  buildOpenClawAgentParams,
+  buildOpenClawSessionDeleteParams,
+  buildOpenClawSessionResetParams,
+  extractOpenClawReply,
+  extractOpenClawSessionId,
+  extractOpenClawSessionKey,
+} from './openclaw.js';
 
 test('extractOpenClawReply prefers structured outputText', () => {
   const raw = JSON.stringify({
@@ -33,10 +40,42 @@ test('extractOpenClawSession metadata when available', () => {
     result: {
       outputText: 'Hello',
       sessionId: 'oc-session-123',
-      sessionKey: 'discord-voice-guild-user',
+      sessionKey: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
     },
   });
 
   assert.equal(extractOpenClawSessionId(raw), 'oc-session-123');
-  assert.equal(extractOpenClawSessionKey(raw), 'discord-voice-guild-user');
+  assert.equal(extractOpenClawSessionKey(raw), 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test');
+});
+
+test('buildOpenClawAgentParams targets the stable session key and optional session id', () => {
+  const params = buildOpenClawAgentParams('Hello there', {
+    sessionKey: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    sessionId: 'oc-session-123',
+  });
+
+  assert.equal(typeof params.idempotencyKey, 'string');
+  assert.equal(String(params.idempotencyKey).startsWith('discord-voice-'), true);
+  assert.equal(params.message, 'Hello there');
+  assert.equal(params.sessionKey, 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test');
+  assert.equal(params.sessionId, 'oc-session-123');
+  assert.equal(params.thinking, 'off');
+});
+
+test('buildOpenClawSessionResetParams creates a new gateway reset request', () => {
+  const params = buildOpenClawSessionResetParams('agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test');
+
+  assert.deepEqual(params, {
+    key: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    reason: 'new',
+  });
+});
+
+test('buildOpenClawSessionDeleteParams creates a delete request with transcript cleanup', () => {
+  const params = buildOpenClawSessionDeleteParams('agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test');
+
+  assert.deepEqual(params, {
+    key: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    deleteTranscript: true,
+  });
 });

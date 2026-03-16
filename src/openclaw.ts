@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 type OpenClawPayload = {
@@ -33,10 +34,45 @@ type OpenClawResponse = {
   };
 };
 
+type OpenClawGatewayResponse = {
+  ok?: boolean;
+  key?: string;
+  deleted?: boolean;
+  archived?: string[];
+  entry?: {
+    sessionId?: string;
+  };
+  result?: OpenClawResult;
+  summary?: string;
+  text?: string;
+  outputText?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  meta?: {
+    sessionId?: string;
+    sessionKey?: string;
+  };
+};
+
 export type OpenClawTurnResult = {
   reply: string;
   sessionKey: string;
   sessionId: string | null;
+};
+
+export type OpenClawSessionRef = {
+  sessionKey: string;
+  sessionId?: string | null;
+};
+
+export type OpenClawBootstrapResult = {
+  sessionKey: string;
+  sessionId: string | null;
+};
+
+export type OpenClawDeleteResult = {
+  deleted: boolean;
+  archived: string[];
 };
 
 function firstNonEmpty(values: Array<string | null | undefined>): string | null {
@@ -52,6 +88,17 @@ function parseOpenClawResponse(raw: string): OpenClawResponse | null {
 
   try {
     return JSON.parse(trimmed) as OpenClawResponse;
+  } catch {
+    return null;
+  }
+}
+
+function parseGatewayResponse(raw: string): OpenClawGatewayResponse | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  try {
+    return JSON.parse(trimmed) as OpenClawGatewayResponse;
   } catch {
     return null;
   }
@@ -104,27 +151,17 @@ function formatCliError(stderr: string, code: number | null): string {
   return `OpenClaw CLI failed (exit ${code ?? 'unknown'}): ${detail}`;
 }
 
-export async function askOpenClaw(transcript: string, sessionKey: string): Promise<OpenClawTurnResult> {
-  const message = transcript.trim();
-  if (!message) {
-    return {
-      reply: 'I could not understand anything yet. Please try again.',
-      sessionKey,
-      sessionId: null,
-    };
-  }
+function runOpenClawGatewayCall(
+  method: string,
+  params: Record<string, unknown>,
+  options: { expectFinal?: boolean; timeoutMs?: number } = {},
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const args = ['gateway', 'call', method, '--json', '--params', JSON.stringify(params)];
+    if (options.expectFinal) args.push('--expect-final');
+    if (typeof options.timeoutMs === 'number') args.push('--timeout', String(options.timeoutMs));
 
-  const raw = await new Promise<string>((resolve, reject) => {
-    const proc = spawn('openclaw', [
-      'agent',
-      '--session-id',
-      sessionKey,
-      '--thinking',
-      'off',
-      '--message',
-      message,
-      '--json',
-    ]);
+    const proc = spawn('openclaw', args);
 
     let stdout = '';
     let stderr = '';
@@ -144,6 +181,72 @@ export async function askOpenClaw(transcript: string, sessionKey: string): Promi
       resolve(stdout);
     });
   });
+}
+
+export function buildOpenClawAgentParams(transcript: string, session: OpenClawSessionRef): Record<string, unknown> {
+  return {
+    idempotencyKey: `discord-voice-${randomUUID()}`,
+    message: transcript.trim(),
+    sessionKey: session.sessionKey.trim(),
+    sessionId: session.sessionId?.trim() || undefined,
+    thinking: 'off',
+  };
+}
+
+export function buildOpenClawSessionResetParams(sessionKey: string): Record<string, unknown> {
+  return {
+    key: sessionKey.trim(),
+    reason: 'new',
+  };
+}
+
+export function buildOpenClawSessionDeleteParams(sessionKey: string): Record<string, unknown> {
+  return {
+    key: sessionKey.trim(),
+    deleteTranscript: true,
+  };
+}
+
+export async function createOpenClawSession(sessionKey: string): Promise<OpenClawBootstrapResult> {
+  const raw = await runOpenClawGatewayCall('sessions.reset', buildOpenClawSessionResetParams(sessionKey));
+  const data = parseGatewayResponse(raw);
+  if (!data?.ok) {
+    throw new Error('OpenClaw did not confirm session creation.');
+  }
+
+  return {
+    sessionKey: firstNonEmpty([data.key, data.sessionKey, sessionKey]) ?? sessionKey,
+    sessionId: firstNonEmpty([data.entry?.sessionId, data.sessionId, data.meta?.sessionId]),
+  };
+}
+
+export async function deleteOpenClawSession(sessionKey: string): Promise<OpenClawDeleteResult> {
+  const raw = await runOpenClawGatewayCall('sessions.delete', buildOpenClawSessionDeleteParams(sessionKey));
+  const data = parseGatewayResponse(raw);
+  if (!data?.ok) {
+    throw new Error('OpenClaw did not confirm session deletion.');
+  }
+
+  return {
+    deleted: Boolean(data.deleted),
+    archived: data.archived ?? [],
+  };
+}
+
+export async function askOpenClaw(transcript: string, session: OpenClawSessionRef): Promise<OpenClawTurnResult> {
+  const message = transcript.trim();
+  if (!message) {
+    return {
+      reply: 'I could not understand anything yet. Please try again.',
+      sessionKey: session.sessionKey,
+      sessionId: session.sessionId ?? null,
+    };
+  }
+
+  const raw = await runOpenClawGatewayCall('agent', buildOpenClawAgentParams(message, session), {
+    expectFinal: true,
+    timeoutMs: 600_000,
+  });
 
   const reply = extractOpenClawReply(raw);
   if (!reply) {
@@ -152,7 +255,7 @@ export async function askOpenClaw(transcript: string, sessionKey: string): Promi
 
   return {
     reply,
-    sessionKey: extractOpenClawSessionKey(raw) ?? sessionKey,
-    sessionId: extractOpenClawSessionId(raw),
+    sessionKey: extractOpenClawSessionKey(raw) ?? session.sessionKey,
+    sessionId: extractOpenClawSessionId(raw) ?? session.sessionId ?? null,
   };
 }

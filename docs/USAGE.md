@@ -11,7 +11,7 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 
 ## Commands
 
-- `/join` - join your voice channel and prepare your stable voice session key
+- `/join` - join your voice channel and create a fresh OpenClaw voice session for this joined connection
 - `/listen` - process exactly one spoken turn from the invoking user
 - `/leave` - disconnect the voice connection
 - `/info` - show voice status, in-memory session status, and dependency health
@@ -19,10 +19,10 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 
 ## Session behavior
 
-- Each Discord user gets one deterministic OpenClaw session key per guild.
-- `/join` only prepares that key inside the bridge.
-- The first successful `openclaw agent --session-id <key>` turn is what may cause OpenClaw to create or reuse a backing session.
-- Later `/listen` calls reuse the same key and continue that context if the local OpenClaw runtime honors it.
+- The bridge keeps one active OpenClaw voice session per guild while it is connected to voice.
+- `/join` creates that session immediately through the OpenClaw gateway.
+- Later `/listen` calls reuse the same active voice session until `/leave`.
+- `/leave` asks OpenClaw to delete/archive that voice session again.
 - After a bot restart, the bridge rebuilds state in memory as users interact again.
 - Do not assume that a prepared key or even a successful turn will always produce a visibly listed session in `openclaw sessions`; that depends on OpenClaw behavior outside this repo.
 
@@ -76,6 +76,6 @@ This is still a manual end-to-end check:
 4. Join a normal voice channel and run `/join`.
 5. Confirm `/join` shows an OpenClaw key and says the real session is only exercised on first successful listen.
 6. Run `/listen`, wait for the prompt, then speak one short sentence.
-7. Confirm the reply shows your transcript and an OpenClaw key, plus a session id if the CLI returns one.
-8. Optionally run `openclaw sessions` locally, but treat session visibility there as an OpenClaw-side observation rather than a bridge guarantee.
-9. Run `/listen` again and confirm the reply still uses the same OpenClaw key and behaves consistently in your local setup.
+7. Confirm the reply shows your transcript and the same OpenClaw key/session id that `/join` created.
+8. Optionally run `openclaw sessions` locally and confirm the voice session exists while connected.
+9. Run `/leave` and confirm the bot disconnects and the voice session disappears or is archived on the OpenClaw side.

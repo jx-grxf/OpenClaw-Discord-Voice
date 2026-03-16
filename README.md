@@ -8,7 +8,7 @@ It is designed for personal or small trusted setups, not as a polished hosted se
 
 ## What it does
 
-- `/join` connects to your current voice channel and prepares a deterministic OpenClaw session key
+- `/join` connects to your current voice channel and creates a fresh OpenClaw voice session for that joined channel
 - `/listen` captures one spoken turn from the invoking user, sends it to OpenClaw, and plays one spoken reply
 - `/leave` disconnects the bot from voice
 - `/info` shows dependency health and current in-memory session status
@@ -74,15 +74,15 @@ More details:
 3. Decode Opus to PCM
 4. Convert PCM to WAV with `ffmpeg`
 5. Transcribe WAV with `whisper-cli`
-6. Send the transcript to `openclaw agent --session-id ... --message ... --json`
+6. Send the transcript to the OpenClaw gateway `agent` method with the active voice `sessionKey`
 7. Generate speech with `say` and play it in Discord
 
 ## Session behavior
 
-- The bridge keeps per-user session state in memory while the bot process is running.
-- `/join` prepares a deterministic session key, but does not itself create a visible OpenClaw session.
-- The first successful `/listen` turn is what actually exercises the OpenClaw CLI with that key.
-- If OpenClaw returns a session id, the bot stores and shows it in `/info`.
+- The bridge keeps one active voice session per guild while the bot is connected.
+- `/join` immediately creates a fresh OpenClaw session for that active voice connection.
+- `/listen` reuses that active session for follow-up turns until `/leave`.
+- `/leave` disconnects the bot and asks OpenClaw to delete/archive that voice session.
 - Whether that session appears in `openclaw sessions` is determined by the local OpenClaw runtime, not guaranteed by this bridge alone.
 
 ## Known limitations

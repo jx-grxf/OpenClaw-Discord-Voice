@@ -1,29 +1,70 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getOrCreateVoiceSession, getVoiceSession, markVoiceSessionUsed } from './state.js';
+import {
+  beginGuildListen,
+  buildVoiceSessionKey,
+  clearVoiceSession,
+  createVoiceSession,
+  endGuildListen,
+  getActiveGuildListenUser,
+  getVoiceSession,
+  markVoiceSessionUsed,
+} from './state.js';
 
-test('getOrCreateVoiceSession creates a stable per-user key', () => {
-  const first = getOrCreateVoiceSession('guild-1', 'user-1');
-  const second = getOrCreateVoiceSession('guild-1', 'user-1');
+test('buildVoiceSessionKey creates a guild-channel scoped ephemeral key', () => {
+  const key = buildVoiceSessionKey('guild-1', 'channel-1');
 
-  assert.equal(first.created, true);
-  assert.equal(second.created, false);
-  assert.equal(first.session.sessionKey, 'discord-voice-guild-1-user-1');
-  assert.equal(second.session.sessionKey, 'discord-voice-guild-1-user-1');
+  assert.match(key, /^agent:main:discord:voice:guild:guild-1:channel:channel-1:join:/);
+});
+
+test('createVoiceSession stores one active session per guild', () => {
+  const created = createVoiceSession('guild-1', 'channel-1', 'user-1', {
+    sessionKey: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    openClawSessionId: 'oc-session-1',
+  });
+
+  assert.equal(created.channelId, 'channel-1');
+  assert.equal(created.createdByUserId, 'user-1');
+  assert.equal(getVoiceSession('guild-1')?.openClawSessionId, 'oc-session-1');
+
+  clearVoiceSession('guild-1');
 });
 
 test('markVoiceSessionUsed stores OpenClaw session details after a real turn', () => {
-  getOrCreateVoiceSession('guild-2', 'user-2');
-  const updated = markVoiceSessionUsed('user-2', {
+  createVoiceSession('guild-2', 'channel-2', 'user-2');
+  const updated = markVoiceSessionUsed('guild-2', {
     initialized: true,
-    sessionKey: 'discord-voice-canonical',
+    sessionKey: 'agent:main:discord:voice:guild:guild-2:channel:channel-2:join:canonical',
     openClawSessionId: 'oc-session-456',
   });
 
   assert(updated);
-  assert.equal(updated?.sessionKey, 'discord-voice-canonical');
+  assert.equal(updated?.sessionKey, 'agent:main:discord:voice:guild:guild-2:channel:channel-2:join:canonical');
   assert.equal(updated?.openClawSessionId, 'oc-session-456');
   assert.equal(Boolean(updated?.initializedAt), true);
   assert.equal(Boolean(updated?.lastUsedAt), true);
-  assert.equal(getVoiceSession('user-2')?.openClawSessionId, 'oc-session-456');
+
+  clearVoiceSession('guild-2');
+});
+
+test('clearVoiceSession removes the active guild session', () => {
+  createVoiceSession('guild-3', 'channel-3', 'user-3');
+
+  const cleared = clearVoiceSession('guild-3');
+
+  assert(cleared);
+  assert.equal(getVoiceSession('guild-3'), null);
+});
+
+test('guild listen lock blocks parallel listeners from other users', () => {
+  const first = beginGuildListen('guild-lock', 'user-a');
+  const second = beginGuildListen('guild-lock', 'user-b');
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, false);
+  assert.equal(second.activeUserId, 'user-a');
+  assert.equal(getActiveGuildListenUser('guild-lock'), 'user-a');
+
+  endGuildListen('guild-lock', 'user-a');
+  assert.equal(getActiveGuildListenUser('guild-lock'), null);
 });

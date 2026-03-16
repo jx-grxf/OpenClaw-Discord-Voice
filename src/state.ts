@@ -1,39 +1,51 @@
+import { randomUUID } from 'node:crypto';
+
 export type VoiceSessionState = {
+  channelId: string;
+  createdAt: number;
+  createdByUserId: string;
   sessionKey: string;
   openClawSessionId: string | null;
   initializedAt: number | null;
   lastUsedAt: number | null;
 };
 
-const activeSessionByUser = new Map<string, VoiceSessionState>();
+const activeSessionByGuild = new Map<string, VoiceSessionState>();
+const activeListenByGuild = new Map<string, string>();
 
-function buildVoiceSessionKey(guildId: string, discordUserId: string): string {
-  return `discord-voice-${guildId}-${discordUserId}`;
+function resolveOpenClawAgentId(): string {
+  return process.env.OPENCLAW_AGENT_ID?.trim() || 'main';
 }
 
-export function getOrCreateVoiceSession(
-  guildId: string,
-  discordUserId: string,
-): { session: VoiceSessionState; created: boolean } {
-  const existing = activeSessionByUser.get(discordUserId);
-  if (existing) return { session: existing, created: false };
+export function buildVoiceSessionKey(guildId: string, channelId: string): string {
+  return `agent:${resolveOpenClawAgentId()}:discord:voice:guild:${guildId}:channel:${channelId}:join:${randomUUID()}`;
+}
 
+export function createVoiceSession(
+  guildId: string,
+  channelId: string,
+  discordUserId: string,
+  sessionRef: { sessionKey?: string | null; openClawSessionId?: string | null } = {},
+): VoiceSessionState {
   const session: VoiceSessionState = {
-    sessionKey: buildVoiceSessionKey(guildId, discordUserId),
-    openClawSessionId: null,
+    channelId,
+    createdAt: Date.now(),
+    createdByUserId: discordUserId,
+    sessionKey: sessionRef.sessionKey?.trim() || buildVoiceSessionKey(guildId, channelId),
+    openClawSessionId: sessionRef.openClawSessionId?.trim() || null,
     initializedAt: null,
     lastUsedAt: null,
   };
 
-  activeSessionByUser.set(discordUserId, session);
-  return { session, created: true };
+  activeSessionByGuild.set(guildId, session);
+  return session;
 }
 
 export function markVoiceSessionUsed(
-  discordUserId: string,
+  guildId: string,
   updates: { openClawSessionId?: string | null; sessionKey?: string | null; initialized?: boolean } = {},
 ): VoiceSessionState | null {
-  const session = activeSessionByUser.get(discordUserId);
+  const session = activeSessionByGuild.get(guildId);
   if (!session) return null;
 
   session.lastUsedAt = Date.now();
@@ -53,6 +65,32 @@ export function markVoiceSessionUsed(
   return session;
 }
 
-export function getVoiceSession(discordUserId: string): VoiceSessionState | null {
-  return activeSessionByUser.get(discordUserId) ?? null;
+export function getVoiceSession(guildId: string): VoiceSessionState | null {
+  return activeSessionByGuild.get(guildId) ?? null;
+}
+
+export function clearVoiceSession(guildId: string): VoiceSessionState | null {
+  const existing = activeSessionByGuild.get(guildId) ?? null;
+  activeSessionByGuild.delete(guildId);
+  return existing;
+}
+
+export function beginGuildListen(guildId: string, discordUserId: string): { ok: boolean; activeUserId: string | null } {
+  const activeUserId = activeListenByGuild.get(guildId) ?? null;
+  if (activeUserId && activeUserId !== discordUserId) {
+    return { ok: false, activeUserId };
+  }
+
+  activeListenByGuild.set(guildId, discordUserId);
+  return { ok: true, activeUserId };
+}
+
+export function endGuildListen(guildId: string, discordUserId: string): void {
+  if (activeListenByGuild.get(guildId) === discordUserId) {
+    activeListenByGuild.delete(guildId);
+  }
+}
+
+export function getActiveGuildListenUser(guildId: string): string | null {
+  return activeListenByGuild.get(guildId) ?? null;
 }

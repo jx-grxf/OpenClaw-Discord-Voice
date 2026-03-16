@@ -71,6 +71,8 @@ client.on('interactionCreate', async (interaction) => {
         await handleInfo(interaction);
         return;
       }
+
+      await interaction.editReply('Unknown command.');
     }
 
   } catch (err) {

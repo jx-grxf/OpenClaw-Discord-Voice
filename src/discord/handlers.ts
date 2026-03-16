@@ -12,8 +12,17 @@ import {
   transcribeWav,
 } from '../audio.js';
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
-import { askOpenClaw } from '../openclaw.js';
-import { getOrCreateVoiceSession, getVoiceSession, markVoiceSessionUsed } from '../state.js';
+import { askOpenClaw, createOpenClawSession, deleteOpenClawSession } from '../openclaw.js';
+import {
+  beginGuildListen,
+  buildVoiceSessionKey,
+  clearVoiceSession,
+  createVoiceSession,
+  endGuildListen,
+  getActiveGuildListenUser,
+  getVoiceSession,
+  markVoiceSessionUsed,
+} from '../state.js';
 import { getOrCreateConnectionFromMember } from '../voice.js';
 
 function formatPipelineError(error: unknown): string {
@@ -21,20 +30,16 @@ function formatPipelineError(error: unknown): string {
   return 'Unknown voice bridge error.';
 }
 
-function formatSessionStatus(userId: string): string {
-  const session = getVoiceSession(userId);
+function formatSessionStatus(guildId: string | null, userId: string): string {
+  if (!guildId) return 'No voice session has been prepared for you yet.';
+  const session = getVoiceSession(guildId);
   if (!session) return 'No voice session has been prepared for you yet.';
-
-  if (!session.initializedAt) {
-    return [`Prepared key: \`${session.sessionKey}\``, 'OpenClaw will only be exercised after your first successful `/listen` turn.'].join(
-      '\n',
-    );
-  }
 
   const details = [`OpenClaw key: \`${session.sessionKey}\``];
   if (session.openClawSessionId) {
     details.push(`OpenClaw session id: \`${session.openClawSessionId}\``);
   }
+  details.push(`Created by Discord user: \`${session.createdByUserId}\``);
   return details.join('\n');
 }
 
@@ -45,23 +50,50 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
     return;
   }
 
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   const connection = await getOrCreateConnectionFromMember(interaction);
   if (!connection) return;
 
-  const { session, created } = getOrCreateVoiceSession(guildId, interaction.user.id);
   const health = collectBridgeHealth();
   const issues = summarizeHealthIssues(health);
+  let session = getVoiceSession(guildId);
+  let created = false;
+
+  if (!session) {
+    const channelId = connection.joinConfig.channelId;
+    if (!channelId) {
+      connection.destroy();
+      await interaction.editReply({
+        content: 'The voice connection has no channel id yet. Please try `/join` again.',
+      });
+      return;
+    }
+    const requestedKey = buildVoiceSessionKey(guildId, channelId);
+    try {
+      const openClawSession = await createOpenClawSession(requestedKey);
+      session = createVoiceSession(guildId, channelId, interaction.user.id, {
+        sessionKey: openClawSession.sessionKey,
+        openClawSessionId: openClawSession.sessionId,
+      });
+      created = true;
+    } catch (error) {
+      connection.destroy();
+      await interaction.editReply({
+        content: `Joining voice worked, but creating the OpenClaw session failed: ${formatPipelineError(error)}`,
+      });
+      return;
+    }
+  }
 
   const embed = new EmbedBuilder()
     .setTitle('Voice bridge ready')
     .setColor(issues.length ? 0xfee75c : 0x57f287)
     .setDescription(
       [
-        `Connected to your voice channel. ${created ? 'Prepared' : 'Reusing'} your voice session key.`,
+        `Connected to your voice channel. ${created ? 'Created' : 'Reusing'} the active OpenClaw voice session.`,
         `OpenClaw key: \`${session.sessionKey}\``,
-        session.initializedAt
-          ? 'This key has already been used successfully with OpenClaw in this bot process.'
-          : 'OpenClaw will only be exercised on your first successful `/listen` turn.',
+        session.openClawSessionId ? `OpenClaw session id: \`${session.openClawSessionId}\`` : 'OpenClaw session id not reported yet.',
         'Use `/listen` for one spoken turn.',
       ].join('\n'),
     );
@@ -73,7 +105,7 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
     });
   }
 
-  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  await interaction.editReply({ embeds: [embed] });
 }
 
 export async function handleListen(interaction: ChatInputCommandInteraction) {
@@ -86,7 +118,22 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
   const connection = await getOrCreateConnectionFromMember(interaction);
   if (!connection) return;
 
-  const { session } = getOrCreateVoiceSession(guildId, interaction.user.id);
+  const session = getVoiceSession(guildId);
+  if (!session) {
+    await interaction.editReply('No OpenClaw voice session is active yet. Run `/join` first.');
+    return;
+  }
+  const listenLock = beginGuildListen(guildId, interaction.user.id);
+  if (!listenLock.ok) {
+    await interaction.editReply(
+      'Another `/listen` request is already running in this server. Wait for it to finish, then try again.',
+    );
+    return;
+  }
+
+  const releaseListenLock = () => {
+    endGuildListen(guildId, interaction.user.id);
+  };
   const receiveUserId = interaction.user.id;
   await interaction.editReply(
     `Listening now. Speak a short sentence. I will stop after about 1.2s of silence.\nOpenClaw key: \`${session.sessionKey}\``,
@@ -115,6 +162,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 });
   } catch (error) {
     console.error(logPrefix, 'Opus decoder init failed', error);
+    releaseListenLock();
     await interaction.followUp({
       content: 'Opus decoding is unavailable. Install `opusscript` or `@discordjs/opus`, then restart the bot.',
       flags: MessageFlags.Ephemeral,
@@ -168,6 +216,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     completed = true;
     clearTimeout(noAudioTimer);
     cleanupListeners();
+    releaseListenLock();
     try {
       opusStream.destroy();
     } catch {}
@@ -296,11 +345,9 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
         throw new Error('Audio arrived, but Whisper could not recognize any speech. Try speaking more clearly or a little louder.');
       }
 
-      const openClawResult = await askOpenClaw(transcript, session.sessionKey);
-      markVoiceSessionUsed(interaction.user.id, {
-        initialized: true,
-        sessionKey: openClawResult.sessionKey,
-        openClawSessionId: openClawResult.sessionId,
+      const openClawResult = await askOpenClaw(transcript, {
+        sessionKey: session.sessionKey,
+        sessionId: session.openClawSessionId,
       });
       log('OpenClaw turn finished', {
         sessionKey: openClawResult.sessionKey,
@@ -311,10 +358,16 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       log('TTS synthesis finished', { ttsPath });
       await playAudioFile(connection, ttsPath);
       log('Reply playback finished');
+      markVoiceSessionUsed(guildId, {
+        initialized: true,
+        sessionKey: openClawResult.sessionKey,
+        openClawSessionId: openClawResult.sessionId,
+      });
 
       completed = true;
       clearTimeout(noAudioTimer);
       cleanupListeners();
+      releaseListenLock();
       await interaction.followUp(
         [
           `You said: **${transcript}**`,
@@ -330,6 +383,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       completed = true;
       clearTimeout(noAudioTimer);
       cleanupListeners();
+      releaseListenLock();
       await interaction.followUp({
         content: `Processing failed: ${formatPipelineError(error)}`,
         flags: MessageFlags.Ephemeral,
@@ -354,8 +408,38 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
     return;
   }
 
+  const activeListenUserId = getActiveGuildListenUser(interaction.guild.id);
+  if (activeListenUserId && activeListenUserId !== interaction.user.id) {
+    await interaction.editReply({ content: 'A `/listen` turn is still running for another user. Try again in a moment.' });
+    return;
+  }
+
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (member.voice.channelId !== connection.joinConfig.channelId) {
+    await interaction.editReply({ content: 'You need to be in the same voice channel as the bot to use `/leave`.' });
+    return;
+  }
+
+  const session = clearVoiceSession(interaction.guild.id);
   connection.destroy();
-  await interaction.editReply('Left the voice channel.');
+
+  if (!session) {
+    await interaction.editReply('Left the voice channel.');
+    return;
+  }
+
+  try {
+    const deleted = await deleteOpenClawSession(session.sessionKey);
+    await interaction.editReply(
+      deleted.deleted
+        ? `Left the voice channel and deleted the OpenClaw voice session.\nOpenClaw key: \`${session.sessionKey}\``
+        : `Left the voice channel. OpenClaw reported no stored session to delete for \`${session.sessionKey}\`.`,
+    );
+  } catch (error) {
+    await interaction.editReply(
+      `Left the voice channel, but OpenClaw session cleanup failed for \`${session.sessionKey}\`: ${formatPipelineError(error)}`,
+    );
+  }
 }
 
 export async function handleInfo(interaction: ChatInputCommandInteraction) {
@@ -373,7 +457,7 @@ export async function handleInfo(interaction: ChatInputCommandInteraction) {
       },
       {
         name: 'Session',
-        value: formatSessionStatus(interaction.user.id),
+        value: formatSessionStatus(interaction.guildId, interaction.user.id),
       },
       {
         name: 'Env',

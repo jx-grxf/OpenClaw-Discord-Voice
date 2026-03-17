@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  beginGuildJoin,
   beginGuildListen,
   buildVoiceSessionKey,
   clearVoiceSession,
   createVoiceSession,
+  endGuildJoin,
   endGuildListen,
+  getActiveGuildJoinUser,
   getActiveGuildListenUser,
   getVoiceSession,
   markVoiceSessionUsed,
@@ -79,4 +82,17 @@ test('guild listen lock also blocks re-entrant listens from the same user', () =
 
   endGuildListen('guild-lock-same-user', 'user-a');
   assert.equal(getActiveGuildListenUser('guild-lock-same-user'), null);
+});
+
+test('guild join lock blocks concurrent setup attempts', () => {
+  const first = beginGuildJoin('guild-join-lock', 'user-a');
+  const second = beginGuildJoin('guild-join-lock', 'user-b');
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, false);
+  assert.equal(second.activeUserId, 'user-a');
+  assert.equal(getActiveGuildJoinUser('guild-join-lock'), 'user-a');
+
+  endGuildJoin('guild-join-lock', 'user-a');
+  assert.equal(getActiveGuildJoinUser('guild-join-lock'), null);
 });

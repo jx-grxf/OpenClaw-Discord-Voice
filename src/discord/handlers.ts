@@ -14,10 +14,13 @@ import {
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
 import { askOpenClaw, createOpenClawSession, deleteOpenClawSession } from '../openclaw.js';
 import {
+  beginGuildJoin,
   beginGuildListen,
   buildVoiceSessionKey,
   clearVoiceSession,
   createVoiceSession,
+  endGuildJoin,
+  getActiveGuildJoinUser,
   endGuildListen,
   getActiveGuildListenUser,
   getVoiceSession,
@@ -32,6 +35,10 @@ function formatPipelineError(error: unknown): string {
 
 function formatSessionStatus(guildId: string | null, userId: string): string {
   if (!guildId) return 'No voice session has been prepared for you yet.';
+  const joinUserId = getActiveGuildJoinUser(guildId);
+  if (joinUserId) {
+    return `A voice session is currently being prepared by Discord user: \`${joinUserId}\``;
+  }
   const session = getVoiceSession(guildId);
   if (!session) return 'No voice session has been prepared for you yet.';
 
@@ -61,16 +68,24 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
   let created = false;
 
   if (!session) {
-    const channelId = connection.joinConfig.channelId;
-    if (!channelId) {
-      connection.destroy();
+    const joinLock = beginGuildJoin(guildId, interaction.user.id);
+    if (!joinLock.ok) {
       await interaction.editReply({
-        content: 'The voice connection has no channel id yet. Please try `/join` again.',
+        content: 'A voice session is already being prepared in this server. Wait a moment, then try again.',
       });
       return;
     }
-    const requestedKey = buildVoiceSessionKey(guildId, channelId);
+
+    const channelId = connection.joinConfig.channelId;
     try {
+      if (!channelId) {
+        connection.destroy();
+        await interaction.editReply({
+          content: 'The voice connection has no channel id yet. Please try `/join` again.',
+        });
+        return;
+      }
+      const requestedKey = buildVoiceSessionKey(guildId, channelId);
       const openClawSession = await createOpenClawSession(requestedKey);
       session = createVoiceSession(guildId, channelId, interaction.user.id, {
         sessionKey: openClawSession.sessionKey,
@@ -83,6 +98,8 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
         content: `Joining voice worked, but creating the OpenClaw session failed: ${formatPipelineError(error)}`,
       });
       return;
+    } finally {
+      endGuildJoin(guildId, interaction.user.id);
     }
   }
 
@@ -117,6 +134,10 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
 
   const session = getVoiceSession(guildId);
   if (!session) {
+    if (getActiveGuildJoinUser(guildId)) {
+      await interaction.editReply('The OpenClaw voice session is still being prepared. Wait a moment, then run `/listen` again.');
+      return;
+    }
     await interaction.editReply('No OpenClaw voice session is active yet. Run `/join` first.');
     return;
   }

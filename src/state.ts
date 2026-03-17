@@ -12,6 +12,7 @@ export type VoiceSessionState = {
 
 const activeSessionByGuild = new Map<string, VoiceSessionState>();
 const activeListenByGuild = new Map<string, string>();
+const activeJoinByGuild = new Map<string, string>();
 
 function resolveOpenClawAgentId(): string {
   return process.env.OPENCLAW_AGENT_ID?.trim() || 'main';
@@ -67,6 +68,26 @@ export function markVoiceSessionUsed(
 
 export function getVoiceSession(guildId: string): VoiceSessionState | null {
   return activeSessionByGuild.get(guildId) ?? null;
+}
+
+export function beginGuildJoin(guildId: string, discordUserId: string): { ok: boolean; activeUserId: string | null } {
+  const activeUserId = activeJoinByGuild.get(guildId) ?? null;
+  if (activeUserId) {
+    return { ok: false, activeUserId };
+  }
+
+  activeJoinByGuild.set(guildId, discordUserId);
+  return { ok: true, activeUserId };
+}
+
+export function endGuildJoin(guildId: string, discordUserId: string): void {
+  if (activeJoinByGuild.get(guildId) === discordUserId) {
+    activeJoinByGuild.delete(guildId);
+  }
+}
+
+export function getActiveGuildJoinUser(guildId: string): string | null {
+  return activeJoinByGuild.get(guildId) ?? null;
 }
 
 export function clearVoiceSession(guildId: string): VoiceSessionState | null {

@@ -208,7 +208,9 @@ export function buildOpenClawSessionDeleteParams(sessionKey: string): Record<str
 }
 
 export async function createOpenClawSession(sessionKey: string): Promise<OpenClawBootstrapResult> {
-  const raw = await runOpenClawGatewayCall('sessions.reset', buildOpenClawSessionResetParams(sessionKey));
+  const raw = await runOpenClawGatewayCall('sessions.reset', buildOpenClawSessionResetParams(sessionKey), {
+    timeoutMs: 30_000,
+  });
   const data = parseGatewayResponse(raw);
   if (!data?.ok) {
     throw new Error('OpenClaw did not confirm session creation.');
@@ -221,7 +223,9 @@ export async function createOpenClawSession(sessionKey: string): Promise<OpenCla
 }
 
 export async function deleteOpenClawSession(sessionKey: string): Promise<OpenClawDeleteResult> {
-  const raw = await runOpenClawGatewayCall('sessions.delete', buildOpenClawSessionDeleteParams(sessionKey));
+  const raw = await runOpenClawGatewayCall('sessions.delete', buildOpenClawSessionDeleteParams(sessionKey), {
+    timeoutMs: 30_000,
+  });
   const data = parseGatewayResponse(raw);
   if (!data?.ok) {
     throw new Error('OpenClaw did not confirm session deletion.');

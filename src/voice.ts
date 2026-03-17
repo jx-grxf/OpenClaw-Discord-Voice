@@ -67,7 +67,14 @@ export async function getOrCreateConnectionFromMember(
     return null;
   }
 
-  await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+  } catch (error) {
+    try {
+      connection.destroy();
+    } catch {}
+    throw error;
+  }
   console.log('Voice connection ready', {
     guildId: guild.id,
     channelId: channel.id,

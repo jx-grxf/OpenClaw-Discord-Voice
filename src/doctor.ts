@@ -9,6 +9,12 @@ type DiscordAuthCheck = {
   detail: string;
 };
 
+type DoctorRow = {
+  label: string;
+  ok: boolean;
+  detail: string;
+};
+
 function checkDiscordAuth(token: string): Promise<DiscordAuthCheck> {
   return new Promise((resolve) => {
     const req = https.request(
@@ -45,10 +51,14 @@ function checkDiscordAuth(token: string): Promise<DiscordAuthCheck> {
   });
 }
 
-function printSection(title: string, lines: string[]) {
-  console.log(`\n${title}`);
-  for (const line of lines) {
-    console.log(`- ${line}`);
+function printSection(title: string, rows: DoctorRow[]) {
+  console.log(`\n== ${title} ==`);
+  for (const row of rows) {
+    const status = row.ok ? '[OK]  ' : '[FAIL]';
+    console.log(`${status} ${row.label}`);
+    if (row.detail) {
+      console.log(`       ${row.detail}`);
+    }
   }
 }
 
@@ -56,20 +66,37 @@ async function main() {
   const health = collectBridgeHealth(process.env);
   const token = process.env.DISCORD_TOKEN?.trim() || '';
   const discordAuth = token ? await checkDiscordAuth(token) : { ok: false, detail: 'DISCORD_TOKEN is missing.' };
+  const envRows: DoctorRow[] = health.env.map((item) => ({
+    label: item.name,
+    ok: item.ok,
+    detail: item.detail,
+  }));
+  const binaryRows: DoctorRow[] = health.binaries.map((item) => ({
+    label: item.name,
+    ok: item.ok,
+    detail: item.detail,
+  }));
+  const assetRows: DoctorRow[] = [
+    {
+      label: health.whisperModel.name,
+      ok: health.whisperModel.ok,
+      detail: health.whisperModel.detail,
+    },
+  ];
+  const discordRows: DoctorRow[] = [
+    {
+      label: 'Bot authentication',
+      ok: discordAuth.ok,
+      detail: discordAuth.detail,
+    },
+  ];
 
-  printSection(
-    'Environment',
-    health.env.map((item) => `${item.ok ? 'OK' : 'MISSING'} ${item.name}${item.detail ? ` (${item.detail})` : ''}`),
-  );
-  printSection(
-    'Binaries',
-    health.binaries.map((item) => `${item.ok ? 'OK' : 'MISSING'} ${item.name}${item.detail ? ` (${item.detail})` : ''}`),
-  );
-  printSection(
-    'Assets',
-    [`${health.whisperModel.ok ? 'OK' : 'MISSING'} ${health.whisperModel.name} (${health.whisperModel.detail})`],
-  );
-  printSection('Discord', [`${discordAuth.ok ? 'OK' : 'FAIL'} ${discordAuth.detail}`]);
+  console.log('OpenClaw Discord Voice Bridge Doctor');
+  console.log('===================================');
+  printSection('Environment', envRows);
+  printSection('Binaries', binaryRows);
+  printSection('Assets', assetRows);
+  printSection('Discord', discordRows);
 
   const hasFailures =
     health.env.some((item) => !item.ok) ||
@@ -77,6 +104,7 @@ async function main() {
     !health.whisperModel.ok ||
     !discordAuth.ok;
 
+  console.log(`\nSummary: ${hasFailures ? 'FAILURES DETECTED' : 'ALL CHECKS PASSED'}`);
   process.exitCode = hasFailures ? 1 : 0;
 }
 

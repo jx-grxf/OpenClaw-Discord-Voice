@@ -26,11 +26,20 @@ import {
   getVoiceSession,
   markVoiceSessionUsed,
 } from '../state.js';
+import { formatAge, truncate } from '../utils.js';
 import { getOrCreateConnectionFromMember } from '../voice.js';
 
 function formatPipelineError(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   return 'Unknown voice bridge error.';
+}
+
+function summarizeSessionKey(sessionKey: string): string {
+  return `\`${truncate(sessionKey, 72)}\``;
+}
+
+function summarizeSessionId(sessionId: string | null): string {
+  return sessionId ? `\`${truncate(sessionId, 48)}\`` : 'Not reported yet';
 }
 
 function formatSessionStatus(guildId: string | null, userId: string): string {
@@ -47,6 +56,10 @@ function formatSessionStatus(guildId: string | null, userId: string): string {
     details.push(`OpenClaw session id: \`${session.openClawSessionId}\``);
   }
   details.push(`Created by Discord user: \`${session.createdByUserId}\``);
+  details.push(`Created: ${formatAge(Date.now() - session.createdAt)}`);
+  if (session.lastUsedAt) {
+    details.push(`Last used: ${formatAge(Date.now() - session.lastUsedAt)}`);
+  }
   return details.join('\n');
 }
 
@@ -106,14 +119,30 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
   const embed = new EmbedBuilder()
     .setTitle('Voice bridge ready')
     .setColor(issues.length ? 0xfee75c : 0x57f287)
-    .setDescription(
-      [
-        `Connected to your voice channel. ${created ? 'Created' : 'Reusing'} the active OpenClaw voice session.`,
-        `OpenClaw key: \`${session.sessionKey}\``,
-        session.openClawSessionId ? `OpenClaw session id: \`${session.openClawSessionId}\`` : 'OpenClaw session id not reported yet.',
-        'Use `/listen` for one spoken turn.',
-      ].join('\n'),
-    );
+    .setDescription(`Connected to your voice channel. ${created ? 'Created' : 'Reusing'} the active OpenClaw voice session.`)
+    .addFields(
+      {
+        name: 'Voice',
+        value: connection.joinConfig.channelId ? `<#${connection.joinConfig.channelId}>` : 'Connected',
+        inline: true,
+      },
+      {
+        name: 'Session key',
+        value: summarizeSessionKey(session.sessionKey),
+        inline: false,
+      },
+      {
+        name: 'Session id',
+        value: summarizeSessionId(session.openClawSessionId),
+        inline: false,
+      },
+      {
+        name: 'Next',
+        value: 'Run `/listen` for one spoken turn or `/info` for full diagnostics.',
+        inline: false,
+      },
+    )
+    .setFooter({ text: created ? 'Fresh OpenClaw session prepared' : 'Existing OpenClaw session reused' });
 
   if (issues.length) {
     embed.addFields({
@@ -160,9 +189,23 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
   let tmpDir: string | null = null;
 
   try {
-    await interaction.editReply(
-      `Listening now. Speak a short sentence. I will stop after about 1.2s of silence.\nOpenClaw key: \`${session.sessionKey}\``,
-    );
+    const listeningEmbed = new EmbedBuilder()
+      .setTitle('Listening now')
+      .setColor(0x5865f2)
+      .setDescription('Speak a short sentence. Capture stops after about 1.2 seconds of silence.')
+      .addFields(
+        {
+          name: 'Voice session',
+          value: summarizeSessionKey(session.sessionKey),
+          inline: false,
+        },
+        {
+          name: 'Tip',
+          value: 'Speak after this message appears and avoid push-to-talk gaps at the start.',
+          inline: false,
+        },
+      );
+    await interaction.editReply({ embeds: [listeningEmbed] });
 
     const botMember = await interaction.guild.members.fetchMe();
     const receiveMember = await interaction.guild.members.fetch(receiveUserId).catch(() => null);
@@ -394,16 +437,33 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
         clearTimeout(noAudioTimer);
         cleanupListeners();
         releaseListenLock();
-        await interaction.followUp(
-          [
-            `You said: **${transcript}**`,
-            `OpenClaw replied: **${openClawResult.reply}**`,
-            `OpenClaw key: \`${openClawResult.sessionKey}\``,
-            openClawResult.sessionId ? `OpenClaw session id: \`${openClawResult.sessionId}\`` : null,
-          ]
-            .filter(Boolean)
-            .join('\n'),
-        );
+        const replyEmbed = new EmbedBuilder()
+          .setTitle('Turn complete')
+          .setColor(0x57f287)
+          .addFields(
+            {
+              name: 'You said',
+              value: transcript,
+              inline: false,
+            },
+            {
+              name: 'OpenClaw replied',
+              value: openClawResult.reply,
+              inline: false,
+            },
+            {
+              name: 'Session key',
+              value: summarizeSessionKey(openClawResult.sessionKey),
+              inline: false,
+            },
+            {
+              name: 'Session id',
+              value: summarizeSessionId(openClawResult.sessionId),
+              inline: false,
+            },
+          )
+          .setFooter({ text: 'Use /info if you need the full bridge state' });
+        await interaction.followUp({ embeds: [replyEmbed] });
       } catch (error) {
         console.error(logPrefix, 'Listen pipeline failed', error);
         completed = true;
@@ -457,21 +517,41 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
   connection.destroy();
 
   if (!session) {
-    await interaction.editReply('Left the voice channel.');
+    const embed = new EmbedBuilder()
+      .setTitle('Disconnected')
+      .setColor(0x5865f2)
+      .setDescription('Left the voice channel.');
+    await interaction.editReply({ embeds: [embed] });
     return;
   }
 
   try {
     const deleted = await deleteOpenClawSession(session.sessionKey);
-    await interaction.editReply(
-      deleted.deleted
-        ? `Left the voice channel and deleted the OpenClaw voice session.\nOpenClaw key: \`${session.sessionKey}\``
-        : `Left the voice channel. OpenClaw reported no stored session to delete for \`${session.sessionKey}\`.`,
-    );
+    const embed = new EmbedBuilder()
+      .setTitle('Disconnected')
+      .setColor(deleted.deleted ? 0x5865f2 : 0xfee75c)
+      .setDescription(
+        deleted.deleted
+          ? 'Left the voice channel and removed the OpenClaw voice session.'
+          : 'Left the voice channel. OpenClaw reported no stored session to delete.',
+      )
+      .addFields({
+        name: 'Session key',
+        value: summarizeSessionKey(session.sessionKey),
+        inline: false,
+      });
+    await interaction.editReply({ embeds: [embed] });
   } catch (error) {
-    await interaction.editReply(
-      `Left the voice channel, but OpenClaw session cleanup failed for \`${session.sessionKey}\`: ${formatPipelineError(error)}`,
-    );
+    const embed = new EmbedBuilder()
+      .setTitle('Disconnected with cleanup warning')
+      .setColor(0xed4245)
+      .setDescription(`Left the voice channel, but OpenClaw session cleanup failed: ${formatPipelineError(error)}`)
+      .addFields({
+        name: 'Session key',
+        value: summarizeSessionKey(session.sessionKey),
+        inline: false,
+      });
+    await interaction.editReply({ embeds: [embed] });
   }
 }
 
@@ -479,18 +559,32 @@ export async function handleInfo(interaction: ChatInputCommandInteraction) {
   const health = collectBridgeHealth();
   const issues = summarizeHealthIssues(health);
   const connection = interaction.guild ? getVoiceConnection(interaction.guild.id) : null;
+  const session = interaction.guildId ? getVoiceSession(interaction.guildId) : null;
+  const joinUserId = interaction.guildId ? getActiveGuildJoinUser(interaction.guildId) : null;
+  const listenUserId = interaction.guildId ? getActiveGuildListenUser(interaction.guildId) : null;
 
   const embed = new EmbedBuilder()
     .setTitle('Bridge status')
     .setColor(issues.length ? 0xed4245 : 0x57f287)
+    .setDescription('Current Discord, OpenClaw, and local runtime status.')
     .addFields(
       {
         name: 'Voice',
-        value: connection ? `Connected to guild ${connection.joinConfig.guildId}` : 'Not connected',
+        value: connection
+          ? `Connected to <#${connection.joinConfig.channelId}>`
+          : 'Not connected',
       },
       {
         name: 'Session',
-        value: formatSessionStatus(interaction.guildId, interaction.user.id),
+        value: formatSessionStatus(interaction.guildId, interaction.user.id).slice(0, 1024),
+      },
+      {
+        name: 'Activity',
+        value: [
+          joinUserId ? `Join in progress by \`${joinUserId}\`` : 'No join in progress',
+          listenUserId ? `Listen lock held by \`${listenUserId}\`` : 'No active listen lock',
+          session?.createdAt ? `Session age: ${formatAge(Date.now() - session.createdAt)}` : 'No active session age',
+        ].join('\n'),
       },
       {
         name: 'Env',

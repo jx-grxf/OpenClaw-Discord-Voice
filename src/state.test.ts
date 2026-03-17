@@ -68,3 +68,15 @@ test('guild listen lock blocks parallel listeners from other users', () => {
   endGuildListen('guild-lock', 'user-a');
   assert.equal(getActiveGuildListenUser('guild-lock'), null);
 });
+
+test('guild listen lock also blocks re-entrant listens from the same user', () => {
+  const first = beginGuildListen('guild-lock-same-user', 'user-a');
+  const second = beginGuildListen('guild-lock-same-user', 'user-a');
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, false);
+  assert.equal(second.activeUserId, 'user-a');
+
+  endGuildListen('guild-lock-same-user', 'user-a');
+  assert.equal(getActiveGuildListenUser('guild-lock-same-user'), null);
+});

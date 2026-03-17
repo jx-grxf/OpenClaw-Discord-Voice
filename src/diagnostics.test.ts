@@ -7,14 +7,12 @@ test('collectBridgeHealth reports missing env vars from provided env', () => {
   const issues = summarizeHealthIssues(health);
 
   assert(issues.some((issue) => issue.startsWith('DISCORD_TOKEN:')));
-  assert(issues.some((issue) => issue.startsWith('DISCORD_CLIENT_ID:')));
   assert(issues.some((issue) => issue.startsWith('DISCORD_GUILD_ID:')));
 });
 
 test('collectBridgeHealth does not require optional discord receive user override', () => {
   const health = collectBridgeHealth({
     DISCORD_TOKEN: 'token',
-    DISCORD_CLIENT_ID: 'client',
     DISCORD_GUILD_ID: 'guild',
   });
   const issues = summarizeHealthIssues(health);

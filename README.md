@@ -34,7 +34,6 @@ It is designed for personal or small trusted setups, not as a polished hosted se
 At startup the bot checks:
 
 - `DISCORD_TOKEN`
-- `DISCORD_CLIENT_ID`
 - `DISCORD_GUILD_ID`
 - `openclaw`, `ffmpeg`, `whisper-cli`, `say`
 - the Whisper model at `models/ggml-base.bin`
@@ -44,8 +43,12 @@ At startup the bot checks:
 Required environment variables:
 
 - `DISCORD_TOKEN`
-- `DISCORD_CLIENT_ID`
 - `DISCORD_GUILD_ID`
+
+Notes:
+
+- The bot derives the Discord application id from the logged-in bot session, so `DISCORD_CLIENT_ID` is no longer required.
+- Local `.env` values override exported shell variables to avoid accidentally reusing an old `DISCORD_TOKEN` from another project or terminal session.
 
 Optional text-to-speech settings:
 

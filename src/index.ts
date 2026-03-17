@@ -1,7 +1,9 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
 import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
+
+dotenv.config({ override: true });
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -13,8 +15,8 @@ function requireEnv(name: string): string {
 }
 
 const DISCORD_TOKEN = requireEnv('DISCORD_TOKEN');
-const DISCORD_CLIENT_ID = requireEnv('DISCORD_CLIENT_ID');
 const DISCORD_GUILD_ID = requireEnv('DISCORD_GUILD_ID');
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID?.trim() || null;
 assertStartupReadiness(process.env);
 
 const commands = [
@@ -25,9 +27,9 @@ const commands = [
   new SlashCommandBuilder().setName('info').setDescription('Show bridge status and dependency health'),
 ].map((c) => c.toJSON());
 
-async function registerCommands() {
+async function registerCommands(applicationId: string) {
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-  await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID), {
+  await rest.put(Routes.applicationGuildCommands(applicationId, DISCORD_GUILD_ID), {
     body: commands,
   });
   console.log('Slash commands registered');
@@ -39,7 +41,11 @@ const client = new Client({
 
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
-  await registerCommands();
+  const applicationId = client.application?.id ?? DISCORD_CLIENT_ID;
+  if (!applicationId) {
+    throw new Error('Could not determine Discord application id. Set DISCORD_CLIENT_ID or retry after login.');
+  }
+  await registerCommands(applicationId);
 });
 
 client.on('interactionCreate', async (interaction) => {

@@ -38,7 +38,6 @@ cp .env.example .env
 Set:
 
 - `DISCORD_TOKEN`
-- `DISCORD_CLIENT_ID`
 - `DISCORD_GUILD_ID`
 
 Optional:

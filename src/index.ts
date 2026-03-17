@@ -16,7 +16,6 @@ function requireEnv(name: string): string {
 
 const DISCORD_TOKEN = requireEnv('DISCORD_TOKEN');
 const DISCORD_GUILD_ID = requireEnv('DISCORD_GUILD_ID');
-const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID?.trim() || null;
 assertStartupReadiness(process.env);
 
 const commands = [
@@ -41,9 +40,9 @@ const client = new Client({
 
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
-  const applicationId = client.application?.id ?? DISCORD_CLIENT_ID;
+  const applicationId = client.application?.id;
   if (!applicationId) {
-    throw new Error('Could not determine Discord application id. Set DISCORD_CLIENT_ID or retry after login.');
+    throw new Error('Could not determine Discord application id after login.');
   }
   await registerCommands(applicationId);
 });

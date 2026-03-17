@@ -52,23 +52,29 @@ export async function getOrCreateConnectionFromMember(
       selfMute: false,
     });
   } else if (connection.joinConfig.channelId !== channel.id) {
-    console.log('Moving voice connection', {
+    console.log('Rejected voice connection move', {
       guildId: guild.id,
       fromChannelId: connection.joinConfig.channelId,
-      toChannelId: channel.id,
+      requestedChannelId: channel.id,
       userId: interaction.user.id,
     });
-    connection.destroy();
-    connection = joinVoiceChannel({
-      channelId: channel.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false,
-    });
+    const message = 'I am already connected to another voice channel in this server. Use `/leave` there first, then try again.';
+    if ('deferred' in interaction && interaction.deferred) {
+      await interaction.editReply({ content: message, embeds: [], components: [] });
+    } else {
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+    }
+    return null;
   }
 
-  await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+  } catch (error) {
+    try {
+      connection.destroy();
+    } catch {}
+    throw error;
+  }
   console.log('Voice connection ready', {
     guildId: guild.id,
     channelId: channel.id,

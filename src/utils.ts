@@ -1,4 +1,5 @@
 export function truncate(s: string, n: number): string {
+  if (n <= 0) return '';
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
 }
 
@@ -11,4 +12,3 @@ export function formatAge(ageMs: number): string {
   const d = Math.floor(h / 24);
   return `vor ${d}d`;
 }
-

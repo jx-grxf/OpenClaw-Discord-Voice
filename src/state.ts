@@ -77,7 +77,7 @@ export function clearVoiceSession(guildId: string): VoiceSessionState | null {
 
 export function beginGuildListen(guildId: string, discordUserId: string): { ok: boolean; activeUserId: string | null } {
   const activeUserId = activeListenByGuild.get(guildId) ?? null;
-  if (activeUserId && activeUserId !== discordUserId) {
+  if (activeUserId) {
     return { ok: false, activeUserId };
   }
 

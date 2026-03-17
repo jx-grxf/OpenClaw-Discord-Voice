@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
 import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
 
@@ -55,7 +55,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      await interaction.deferReply();
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       if (interaction.commandName === 'leave') {
         await handleLeave(interaction);

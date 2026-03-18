@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
@@ -14,7 +15,17 @@ export type TtsProvider = 'say' | 'elevenlabs';
 
 export async function convertPcmToWav(pcmPath: string, wavPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', pcmPath, wavPath, '-y']);
+    const ffmpeg = spawn('ffmpeg', [
+      '-f', 's16le',
+      '-ar', '48000',
+      '-ac', '2',
+      '-i', pcmPath,
+      '-ac', '1',
+      '-ar', '16000',
+      '-c:a', 'pcm_s16le',
+      wavPath,
+      '-y',
+    ]);
     ffmpeg.on('error', reject);
     ffmpeg.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`))));
   });
@@ -30,18 +41,36 @@ export async function removeRequestTempDir(dirPath: string): Promise<void> {
   await fs.promises.rm(dirPath, { recursive: true, force: true });
 }
 
+export function getWhisperThreadCount(): number {
+  const raw = Number(process.env.WHISPER_THREADS ?? '');
+  if (Number.isFinite(raw) && raw >= 1) {
+    return Math.max(1, Math.floor(raw));
+  }
+
+  return Math.max(1, Math.min(8, os.availableParallelism?.() ?? 4));
+}
+
+export function buildWhisperCliArgs(modelPath: string, wavPath: string, transcriptBasePath: string): string[] {
+  const language = process.env.WHISPER_LANGUAGE?.trim().toLowerCase() || 'auto';
+
+  return [
+    '-m', modelPath,
+    '-f', wavPath,
+    '-otxt',
+    '-of', transcriptBasePath,
+    '-l', language,
+    '-t', String(getWhisperThreadCount()),
+    '-np',
+    '-nt',
+  ];
+}
+
 export async function transcribeWav(wavPath: string, transcriptBasePath: string): Promise<string> {
   const modelPath = getWhisperModelPath();
   if (!fs.existsSync(modelPath)) throw new Error(`Whisper model missing: ${modelPath}`);
 
   return await new Promise<string>((resolve, reject) => {
-    const args = ['-m', modelPath, '-f', wavPath, '-otxt', '-of', transcriptBasePath];
-    const language = process.env.WHISPER_LANGUAGE?.trim().toLowerCase();
-    if (language && language !== 'auto') {
-      args.push('-l', language);
-    }
-
-    const proc = spawn('whisper-cli', args, {
+    const proc = spawn('whisper-cli', buildWhisperCliArgs(modelPath, wavPath, transcriptBasePath), {
       cwd: process.cwd(),
     });
 

@@ -57,6 +57,7 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 - Check that `whisper-cli` is in `PATH`.
 - Check that `ffmpeg` is in `PATH`.
 - If you only speak one language most of the time, try setting `WHISPER_LANGUAGE=de` or `WHISPER_LANGUAGE=en`.
+- If transcription feels slow, try a stronger model only if your machine can handle it, and tune `WHISPER_THREADS`.
 
 ### No OpenClaw reply
 

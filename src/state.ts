@@ -121,3 +121,7 @@ export function clearAllVoiceState(): void {
   activeListenByGuild.clear();
   activeJoinByGuild.clear();
 }
+
+export function listVoiceSessions(): Array<{ guildId: string; session: VoiceSessionState }> {
+  return Array.from(activeSessionByGuild.entries()).map(([guildId, session]) => ({ guildId, session }));
+}

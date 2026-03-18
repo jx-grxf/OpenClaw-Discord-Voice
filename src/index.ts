@@ -4,7 +4,8 @@ import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuil
 import { assertStartupReadiness } from './diagnostics.js';
 import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
 import { handleHelpButton, handleHelpCommand } from './discord/help.js';
-import { clearAllVoiceState } from './state.js';
+import { deleteOpenClawSessionWithRetry } from './openclaw.js';
+import { clearAllVoiceState, listVoiceSessions } from './state.js';
 
 dotenv.config({ override: true });
 
@@ -66,6 +67,25 @@ async function gracefulShutdown(signal: NodeJS.Signals | 'UNCAUGHT_EXCEPTION' | 
   console.log(`Received ${signal}. Cleaning up Discord voice connections...`);
 
   try {
+    const sessions = listVoiceSessions();
+    if (sessions.length > 0) {
+      console.log('Cleaning up OpenClaw sessions during shutdown', { sessionCount: sessions.length });
+      await Promise.allSettled(
+        sessions.map(({ guildId, session }) =>
+          deleteOpenClawSessionWithRetry(session.sessionKey, {
+            attempts: 1,
+            timeoutMs: 5_000,
+            backoffMs: 250,
+          }).catch((error) => {
+            console.error('Failed to clean up OpenClaw session during shutdown', {
+              guildId,
+              sessionKey: session.sessionKey,
+              error,
+            });
+          }),
+        ),
+      );
+    }
     destroyAllVoiceConnections();
     clearAllVoiceState();
     client.destroy();

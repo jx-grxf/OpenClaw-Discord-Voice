@@ -13,7 +13,7 @@ import {
   transcribeWav,
 } from '../audio.js';
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
-import { askOpenClaw, createOpenClawSession, deleteOpenClawSession } from '../openclaw.js';
+import { askOpenClaw, createOpenClawSession, deleteOpenClawSession, deleteOpenClawSessionWithRetry } from '../openclaw.js';
 import {
   beginGuildJoin,
   beginGuildListen,
@@ -128,6 +128,8 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
     return;
   }
 
+  const hadVoiceConnectionBeforeJoin = Boolean(getVoiceConnection(guildId));
+
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const connection = await getOrCreateConnectionFromMember(interaction);
@@ -139,6 +141,29 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
   let created = false;
 
   const channelId = connection.joinConfig.channelId;
+  if (session && !hadVoiceConnectionBeforeJoin) {
+    console.warn('Discarding stale voice session after reconnect', {
+      guildId,
+      previousChannelId: session.channelId,
+      requestedChannelId: channelId,
+    });
+    clearVoiceSession(guildId);
+    try {
+      await deleteOpenClawSessionWithRetry(session.sessionKey, {
+        attempts: 2,
+        timeoutMs: 10_000,
+        backoffMs: 500,
+      });
+    } catch (error) {
+      console.warn('Failed to clean up stale OpenClaw session after reconnect', {
+        guildId,
+        previousChannelId: session.channelId,
+        error: formatPipelineError(error),
+      });
+    }
+    session = null;
+  }
+
   if (session && channelId && session.channelId !== channelId) {
     console.warn('Discarding stale voice session for different channel', {
       guildId,
@@ -689,7 +714,11 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
   }
 
   try {
-    const deleted = await deleteOpenClawSession(session.sessionKey);
+    const deleted = await deleteOpenClawSessionWithRetry(session.sessionKey, {
+      attempts: 3,
+      timeoutMs: 15_000,
+      backoffMs: 1_000,
+    });
     clearVoiceSession(interaction.guild.id);
     const embed = new EmbedBuilder()
       .setTitle('Disconnected')

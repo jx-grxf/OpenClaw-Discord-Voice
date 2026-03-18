@@ -75,6 +75,7 @@ Text-to-speech settings:
 - `ELEVENLABS_OUTPUT_FORMAT`: optional, default `mp3_44100_128`
 - `WHISPER_MODEL_PATH`: optional, default `models/ggml-base.bin`
 - `WHISPER_LANGUAGE`: optional, default `auto`; set `de` or `en` if you want to force a language
+- `WHISPER_THREADS`: optional, default auto-capped; increase if you want to use more CPU for transcription
 - `VOICE_NO_AUDIO_TIMEOUT_MS`: optional, default `12000`
 - `VOICE_NO_SPEECH_TIMEOUT_MS`: optional, default `5000`
 - `VOICE_MAX_CAPTURE_MS`: optional, default `9000`

@@ -8,6 +8,9 @@ export type VoiceSessionState = {
   openClawSessionId: string | null;
   initializedAt: number | null;
   lastUsedAt: number | null;
+  listenMode: 'slash' | 'auto';
+  autoListenTextChannelId: string | null;
+  botSpeaking: boolean;
 };
 
 const activeSessionByGuild = new Map<string, VoiceSessionState>();
@@ -36,6 +39,9 @@ export function createVoiceSession(
     openClawSessionId: sessionRef.openClawSessionId?.trim() || null,
     initializedAt: null,
     lastUsedAt: null,
+    listenMode: 'slash',
+    autoListenTextChannelId: null,
+    botSpeaking: false,
   };
 
   activeSessionByGuild.set(guildId, session);
@@ -68,6 +74,27 @@ export function markVoiceSessionUsed(
 
 export function getVoiceSession(guildId: string): VoiceSessionState | null {
   return activeSessionByGuild.get(guildId) ?? null;
+}
+
+export function setVoiceSessionListenMode(
+  guildId: string,
+  mode: 'slash' | 'auto',
+  options: { textChannelId?: string | null } = {},
+): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.listenMode = mode;
+  session.autoListenTextChannelId = mode === 'auto' ? options.textChannelId?.trim() || session.autoListenTextChannelId : null;
+  return session;
+}
+
+export function setVoiceSessionBotSpeaking(guildId: string, speaking: boolean): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.botSpeaking = speaking;
+  return session;
 }
 
 export function beginGuildJoin(guildId: string, discordUserId: string): { ok: boolean; activeUserId: string | null } {

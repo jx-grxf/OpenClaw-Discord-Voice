@@ -21,7 +21,7 @@ test('extractOpenClawReply prefers structured outputText', () => {
   assert.equal(extractOpenClawReply(raw), 'Hello from OpenClaw');
 });
 
-test('extractOpenClawReply falls back to payload text or summary', () => {
+test('extractOpenClawReply falls back to summary when no final outputText exists', () => {
   const raw = JSON.stringify({
     result: {
       payloads: [{ text: '' }, { content: 'Reply from payload' }],
@@ -29,7 +29,48 @@ test('extractOpenClawReply falls back to payload text or summary', () => {
     },
   });
 
-  assert.equal(extractOpenClawReply(raw), 'Reply from payload');
+  assert.equal(extractOpenClawReply(raw), 'Summary reply');
+});
+
+test('extractOpenClawReply joins meaningful payload text when tools emit interim and final text', () => {
+  const raw = JSON.stringify({
+    result: {
+      payloads: [
+        { text: 'Ich schaue kurz nach.' },
+        { content: '' },
+        { content: 'Finale Antwort mit den echten Ergebnissen.' },
+      ],
+    },
+  });
+
+  assert.equal(extractOpenClawReply(raw), 'Ich schaue kurz nach.\n\nFinale Antwort mit den echten Ergebnissen.');
+});
+
+test('extractOpenClawReply still prefers summary over payload chatter when available', () => {
+  const raw = JSON.stringify({
+    result: {
+      payloads: [
+        { text: 'Ich prüfe das kurz.' },
+        { content: 'Noch ein Zwischenstand.' },
+      ],
+      meta: { summaryText: 'Zusammenfassung mit finaler Antwort.' },
+    },
+  });
+
+  assert.equal(extractOpenClawReply(raw), 'Zusammenfassung mit finaler Antwort.');
+});
+
+test('extractOpenClawReply ignores completed placeholder text and uses payloads instead', () => {
+  const raw = JSON.stringify({
+    summary: 'completed',
+    text: 'completed',
+    result: {
+      text: 'completed',
+      payloads: [{ text: 'Die echte finale Antwort.' }],
+    },
+  });
+
+  assert.equal(extractOpenClawReply(raw), 'Die echte finale Antwort.');
 });
 
 test('extractOpenClawReply returns raw text when input is not json', () => {

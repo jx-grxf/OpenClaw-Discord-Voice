@@ -12,6 +12,8 @@ import {
   getActiveGuildListenUser,
   getVoiceSession,
   markVoiceSessionUsed,
+  setVoiceSessionBotSpeaking,
+  setVoiceSessionListenMode,
 } from './state.js';
 
 test('buildVoiceSessionKey creates a guild-channel scoped ephemeral key', () => {
@@ -29,8 +31,33 @@ test('createVoiceSession stores one active session per guild', () => {
   assert.equal(created.channelId, 'channel-1');
   assert.equal(created.createdByUserId, 'user-1');
   assert.equal(getVoiceSession('guild-1')?.openClawSessionId, 'oc-session-1');
+  assert.equal(getVoiceSession('guild-1')?.listenMode, 'slash');
 
   clearVoiceSession('guild-1');
+});
+
+test('voice session listen mode can switch to auto with a bound text channel', () => {
+  createVoiceSession('guild-mode', 'channel-1', 'user-1');
+
+  const updated = setVoiceSessionListenMode('guild-mode', 'auto', { textChannelId: 'text-1' });
+
+  assert(updated);
+  assert.equal(updated?.listenMode, 'auto');
+  assert.equal(updated?.autoListenTextChannelId, 'text-1');
+
+  clearVoiceSession('guild-mode');
+});
+
+test('voice session bot speaking flag can be toggled', () => {
+  createVoiceSession('guild-speaking', 'channel-1', 'user-1');
+
+  setVoiceSessionBotSpeaking('guild-speaking', true);
+  assert.equal(getVoiceSession('guild-speaking')?.botSpeaking, true);
+
+  setVoiceSessionBotSpeaking('guild-speaking', false);
+  assert.equal(getVoiceSession('guild-speaking')?.botSpeaking, false);
+
+  clearVoiceSession('guild-speaking');
 });
 
 test('markVoiceSessionUsed stores OpenClaw session details after a real turn', () => {

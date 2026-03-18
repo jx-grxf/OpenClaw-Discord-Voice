@@ -82,6 +82,17 @@ function firstNonEmpty(values: Array<string | null | undefined>): string | null 
   return null;
 }
 
+function collectNonEmpty(values: Array<string | null | undefined>): string[] {
+  return values
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value.length > 0);
+}
+
+function isStatusPlaceholder(value: string | null | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === 'completed' || normalized === 'accepted' || normalized === 'in_progress' || normalized === 'ok';
+}
+
 function parseOpenClawResponse(raw: string): OpenClawResponse | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -111,15 +122,23 @@ export function extractOpenClawReply(raw: string): string | null {
   const data = parseOpenClawResponse(trimmed);
   if (!data) return trimmed;
 
-  return firstNonEmpty([
+  const payloadTexts = collectNonEmpty(
+    (data.result?.payloads ?? []).flatMap((payload) => [payload.text, payload.content]),
+  );
+  const joinedPayloadReply = payloadTexts.join('\n\n').trim() || null;
+
+  const structuredCandidates = [
     data.result?.outputText,
     data.outputText,
     data.result?.text,
     data.text,
-    ...(data.result?.payloads ?? []).flatMap((payload) => [payload.text, payload.content]),
     data.result?.meta?.summaryText,
     data.summary,
-  ]);
+  ].filter((value) => !isStatusPlaceholder(value));
+
+  const structuredReply = firstNonEmpty(structuredCandidates);
+
+  return firstNonEmpty([structuredReply, joinedPayloadReply]);
 }
 
 export function extractOpenClawSessionId(raw: string): string | null {

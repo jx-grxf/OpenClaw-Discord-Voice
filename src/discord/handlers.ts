@@ -1,8 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import prism from 'prism-media';
-import { EndBehaviorType, getVoiceConnection } from '@discordjs/voice';
-import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
+import { EndBehaviorType, VoiceConnection, getVoiceConnection } from '@discordjs/voice';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
+  ChatInputCommandInteraction,
+  EmbedBuilder,
+  Guild,
+  MessageFlags,
+} from 'discord.js';
 import {
   convertPcmToWav,
   createRequestTempDir,
@@ -26,6 +35,8 @@ import {
   getActiveGuildListenUser,
   getVoiceSession,
   markVoiceSessionUsed,
+  setVoiceSessionBotSpeaking,
+  setVoiceSessionListenMode,
 } from '../state.js';
 import { formatAge, truncate } from '../utils.js';
 import { getOrCreateConnectionFromMember } from '../voice.js';
@@ -45,6 +56,100 @@ function summarizeSessionId(sessionId: string | null): string {
 
 function statusLabel(ok: boolean): string {
   return ok ? 'OK' : 'MISSING';
+}
+
+function formatLatency(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+const VOICE_MODE_SLASH = 'voice-mode:slash';
+const VOICE_MODE_AUTO = 'voice-mode:auto';
+
+type ListenExecutionContext = {
+  guildId: string;
+  guild: Guild;
+  requestUserId: string;
+  connection: VoiceConnection;
+  session: NonNullable<ReturnType<typeof getVoiceSession>>;
+  startNotice?: () => Promise<void>;
+  finishReply: (payload: { embed?: EmbedBuilder; content?: string }) => Promise<void>;
+};
+
+const autoListenControllers = new Map<string, { dispose: () => void; triggerActive: boolean }>();
+
+function buildJoinModeButtons(activeMode: 'slash' | 'auto') {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(VOICE_MODE_SLASH)
+        .setLabel('Slash-to-talk')
+        .setStyle(activeMode === 'slash' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(VOICE_MODE_AUTO)
+        .setLabel('Auto-listen (Beta)')
+        .setStyle(activeMode === 'auto' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+function buildJoinEmbed(session: NonNullable<ReturnType<typeof getVoiceSession>>, options: {
+  channelId: string | null;
+  created: boolean;
+  issues: string[];
+}) {
+  const modeText = session.listenMode === 'auto'
+    ? 'Auto-listen Beta is active. Speak naturally while the bot is idle, but expect rough edges.'
+    : 'Slash-to-talk is active. Run `/listen` whenever you want to speak.';
+
+  const embed = new EmbedBuilder()
+    .setTitle('Voice bridge ready')
+    .setColor(options.issues.length ? 0xfee75c : 0x57f287)
+    .setDescription(`Connected to your voice channel. ${options.created ? 'Created' : 'Reusing'} the active OpenClaw voice session.`)
+    .addFields(
+      {
+        name: 'Voice',
+        value: options.channelId ? `<#${options.channelId}>` : 'Connected',
+        inline: true,
+      },
+      {
+        name: 'Mode',
+        value: session.listenMode === 'auto' ? 'Auto-listen (Beta)' : 'Slash-to-talk',
+        inline: true,
+      },
+      {
+        name: 'Session key',
+        value: summarizeSessionKey(session.sessionKey),
+        inline: false,
+      },
+      {
+        name: 'Session id',
+        value: summarizeSessionId(session.openClawSessionId),
+        inline: false,
+      },
+      {
+        name: 'Next',
+        value: `${modeText}\nUse the buttons below to switch modes at any time.`,
+        inline: false,
+      },
+    )
+    .setFooter({ text: options.created ? 'Fresh OpenClaw session prepared' : 'Existing OpenClaw session reused' });
+
+  if (options.issues.length) {
+    embed.addFields({
+      name: 'Warnings',
+      value: options.issues.map((issue) => `- ${issue}`).join('\n').slice(0, 1024),
+    });
+  }
+
+  return embed;
+}
+
+function disposeAutoListen(guildId: string) {
+  const controller = autoListenControllers.get(guildId);
+  if (!controller) return;
+  controller.dispose();
+  autoListenControllers.delete(guildId);
 }
 
 function getNoAudioTimeoutMs(): number {
@@ -123,7 +228,8 @@ function formatSessionStatus(guildId: string | null, userId: string): string {
 
 export async function handleJoin(interaction: ChatInputCommandInteraction) {
   const guildId = interaction.guildId;
-  if (!guildId) {
+  const guild = interaction.guild;
+  if (!guildId || !guild) {
     await interaction.reply({ content: 'This command only works inside a server.', flags: MessageFlags.Ephemeral });
     return;
   }
@@ -147,6 +253,7 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
       previousChannelId: session.channelId,
       requestedChannelId: channelId,
     });
+    disposeAutoListen(guildId);
     clearVoiceSession(guildId);
     try {
       await deleteOpenClawSessionWithRetry(session.sessionKey, {
@@ -170,6 +277,7 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
       previousChannelId: session.channelId,
       requestedChannelId: channelId,
     });
+    disposeAutoListen(guildId);
     clearVoiceSession(guildId);
     try {
       await deleteOpenClawSession(session.sessionKey);
@@ -217,99 +325,48 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
     }
   }
 
-  const embed = new EmbedBuilder()
-    .setTitle('Voice bridge ready')
-    .setColor(issues.length ? 0xfee75c : 0x57f287)
-    .setDescription(`Connected to your voice channel. ${created ? 'Created' : 'Reusing'} the active OpenClaw voice session.`)
-    .addFields(
-      {
-        name: 'Voice',
-        value: connection.joinConfig.channelId ? `<#${connection.joinConfig.channelId}>` : 'Connected',
-        inline: true,
-      },
-      {
-        name: 'Session key',
-        value: summarizeSessionKey(session.sessionKey),
-        inline: false,
-      },
-      {
-        name: 'Session id',
-        value: summarizeSessionId(session.openClawSessionId),
-        inline: false,
-      },
-      {
-        name: 'Next',
-        value: 'Run `/listen` for one spoken turn or `/info` for full diagnostics.',
-        inline: false,
-      },
-    )
-    .setFooter({ text: created ? 'Fresh OpenClaw session prepared' : 'Existing OpenClaw session reused' });
+  const embed = buildJoinEmbed(session, {
+    channelId: connection.joinConfig.channelId,
+    created,
+    issues,
+  });
 
-  if (issues.length) {
-    embed.addFields({
-      name: 'Warnings',
-      value: issues.map((issue) => `- ${issue}`).join('\n').slice(0, 1024),
-    });
+  if (session.listenMode === 'auto') {
+    enableAutoListen(guildId, guild, connection);
+  } else {
+    disposeAutoListen(guildId);
   }
 
-  await interaction.editReply({ embeds: [embed] });
+  await interaction.editReply({
+    embeds: [embed],
+    components: buildJoinModeButtons(session.listenMode),
+  });
 }
 
-export async function handleListen(interaction: ChatInputCommandInteraction) {
-  const guildId = interaction.guildId;
-  if (!guildId || !interaction.guild) {
-    await interaction.editReply({ content: 'This command only works inside a server.' });
-    return;
-  }
+async function runListenTurn(context: ListenExecutionContext) {
+  const { guildId, guild, requestUserId, connection, session, startNotice, finishReply } = context;
 
-  const session = getVoiceSession(guildId);
-  if (!session) {
-    if (getActiveGuildJoinUser(guildId)) {
-      await interaction.editReply('The OpenClaw voice session is still being prepared. Wait a moment, then run `/listen` again.');
-      return;
-    }
-    await interaction.editReply('No OpenClaw voice session is active yet. Run `/join` first.');
-    return;
-  }
-
-  const connection = await getOrCreateConnectionFromMember(interaction);
-  if (!connection) return;
-
-  const listenLock = beginGuildListen(guildId, interaction.user.id);
+  const listenLock = beginGuildListen(guildId, requestUserId);
   if (!listenLock.ok) {
-    await interaction.editReply(
-      'Another `/listen` request is already running in this server. Wait for it to finish, then try again.',
-    );
+    await finishReply({
+      content: 'Another voice turn is already running in this server. Wait for it to finish, then try again.',
+    });
     return;
   }
 
   const releaseListenLock = () => {
-    endGuildListen(guildId, interaction.user.id);
+    endGuildListen(guildId, requestUserId);
   };
-  const receiveUserId = interaction.user.id;
   let tmpDir: string | null = null;
+  const listenStartedAt = Date.now();
 
   try {
-    const listeningEmbed = new EmbedBuilder()
-      .setTitle('Listening now')
-      .setColor(0x5865f2)
-      .setDescription('Speak a short sentence. Capture stops after about 1.2 seconds of silence.')
-      .addFields(
-        {
-          name: 'Voice session',
-          value: summarizeSessionKey(session.sessionKey),
-          inline: false,
-        },
-        {
-          name: 'Tip',
-          value: 'Speak after this message appears and avoid push-to-talk gaps at the start.',
-          inline: false,
-        },
-      );
-    await interaction.editReply({ embeds: [listeningEmbed] });
+    if (startNotice) {
+      await startNotice();
+    }
 
-    const botMember = await interaction.guild.members.fetchMe();
-    const receiveMember = await interaction.guild.members.fetch(receiveUserId).catch(() => null);
+    const botMember = await guild.members.fetchMe();
+    const receiveMember = await guild.members.fetch(requestUserId).catch(() => null);
 
     const receiver = connection.receiver;
     tmpDir = createRequestTempDir();
@@ -321,7 +378,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     };
     const timing = getListenTimingConfig();
 
-    const opusStream = receiver.subscribe(receiveUserId, {
+    const opusStream = receiver.subscribe(requestUserId, {
       end: {
         behavior: EndBehaviorType.AfterSilence,
         duration: 1200,
@@ -334,9 +391,8 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     } catch (error) {
       console.error(logPrefix, 'Opus decoder init failed', error);
       releaseListenLock();
-      await interaction.followUp({
+      await finishReply({
         content: 'Opus decoding is unavailable. Install `opusscript` or `@discordjs/opus`, then restart the bot.',
-        flags: MessageFlags.Ephemeral,
       });
       await removeRequestTempDir(requestTmpDir);
       return;
@@ -357,18 +413,18 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     let captureFinalized = false;
 
     const onSpeakingStart = (userId: string) => {
-      if (userId !== receiveUserId) return;
+      if (userId !== requestUserId) return;
       speakingStarted = true;
       log('Speaking started', { userId });
     };
 
     const onSpeakingEnd = (userId: string) => {
-      if (userId !== receiveUserId) return;
+      if (userId !== requestUserId) return;
       log('Speaking ended', { userId, opusPackets: receivedOpusPackets, pcmBytes: receivedPcmBytes });
     };
 
     const onSsrcCreate = (data: { userId: string; audioSSRC: number }) => {
-      if (data.userId !== receiveUserId) return;
+      if (data.userId !== requestUserId) return;
       ssrcMapped = true;
       log('SSRC mapped', { userId: data.userId, audioSSRC: data.audioSSRC });
     };
@@ -429,21 +485,21 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       if (!out.destroyed) {
         out.destroy();
       }
-      await interaction.followUp({ content: message, flags: MessageFlags.Ephemeral });
+      await finishReply({ content: message });
       await removeRequestTempDir(requestTmpDir);
     };
 
     const noAudioTimer = setTimeout(async () => {
       if (completed || receivedOpusPackets > 0) return;
       console.warn(logPrefix, 'No audio received before timeout', {
-        guildId: interaction.guild?.id,
+        guildId: guild.id,
         channelId: connection.joinConfig.channelId,
         speakingStarted,
         ssrcMapped,
         sessionKeyPreview: redactSessionKey(session.sessionKey),
       });
       await finishWithError(
-        'I did not receive any voice signal from you. Check that Discord voice activity or push-to-talk is actually sending audio, then try `/listen` again.',
+        'I did not receive any voice signal from you. Check that Discord voice activity or push-to-talk is actually sending audio, then try again.',
       );
     }, timing.noAudioTimeoutMs);
 
@@ -467,7 +523,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
 
     log('Receive pipeline started', {
       ...buildListenLogDetails({
-        guildId: interaction.guild.id,
+        guildId: guild.id,
         channelId: connection.joinConfig.channelId,
         speakingStarted,
         ssrcMapped,
@@ -609,7 +665,9 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
 
         await synthesizeSpeech(openClawResult.reply, ttsPath);
         log('TTS synthesis finished', { ttsPath });
+        setVoiceSessionBotSpeaking(guildId, true);
         await playAudioFile(connection, ttsPath);
+        setVoiceSessionBotSpeaking(guildId, false);
         log('Reply playback finished');
         markVoiceSessionUsed(guildId, {
           initialized: true,
@@ -647,9 +705,14 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
               value: summarizeSessionId(openClawResult.sessionId),
               inline: false,
             },
+            {
+              name: 'Latency',
+              value: formatLatency(Date.now() - listenStartedAt),
+              inline: false,
+            },
           )
           .setFooter({ text: 'Use /info if you need the full bridge state' });
-        await interaction.followUp({ embeds: [replyEmbed] });
+        await finishReply({ embed: replyEmbed });
       } catch (error) {
         console.error(logPrefix, 'Listen pipeline failed', error);
         completed = true;
@@ -658,10 +721,8 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
         clearTimeout(maxCaptureTimer);
         cleanupListeners();
         releaseListenLock();
-        await interaction.followUp({
-          content: `Processing failed: ${formatPipelineError(error)}`,
-          flags: MessageFlags.Ephemeral,
-        });
+        setVoiceSessionBotSpeaking(guildId, false);
+        await finishReply({ content: `Processing failed: ${formatPipelineError(error)}` });
       } finally {
         await removeRequestTempDir(requestTmpDir);
       }
@@ -675,6 +736,176 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     }
     throw error;
   }
+}
+
+export async function handleListen(interaction: ChatInputCommandInteraction) {
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.guild) {
+    await interaction.editReply({ content: 'This command only works inside a server.' });
+    return;
+  }
+
+  const session = getVoiceSession(guildId);
+  if (!session) {
+    if (getActiveGuildJoinUser(guildId)) {
+      await interaction.editReply('The OpenClaw voice session is still being prepared. Wait a moment, then run `/listen` again.');
+      return;
+    }
+    await interaction.editReply('No OpenClaw voice session is active yet. Run `/join` first.');
+    return;
+  }
+
+  if (session.listenMode === 'auto') {
+    await interaction.editReply('Auto-listen Beta is active in this server. Just speak while the bot is idle, or switch back to Slash-to-talk in `/join`.');
+    return;
+  }
+
+  const connection = await getOrCreateConnectionFromMember(interaction);
+  if (!connection) return;
+
+  await runListenTurn({
+    guildId,
+    guild: interaction.guild,
+    requestUserId: interaction.user.id,
+    connection,
+    session,
+    startNotice: async () => {
+      const listeningEmbed = new EmbedBuilder()
+        .setTitle('Listening now')
+        .setColor(0x5865f2)
+        .setDescription('Speak a short sentence. Capture stops after about 1.2 seconds of silence.')
+        .addFields(
+          {
+            name: 'Voice session',
+            value: summarizeSessionKey(session.sessionKey),
+            inline: false,
+          },
+          {
+            name: 'Tip',
+            value: 'Speak after this message appears and avoid push-to-talk gaps at the start.',
+            inline: false,
+          },
+        );
+      await interaction.editReply({ embeds: [listeningEmbed] });
+    },
+    finishReply: async ({ embed, content }) => {
+      if (embed) {
+        await interaction.followUp({ embeds: [embed] });
+        return;
+      }
+      if (content) {
+        await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
+      }
+    },
+  });
+}
+
+async function sendAutoModeMessage(guild: NonNullable<ListenExecutionContext['guild']>, textChannelId: string | null, payload: {
+  embed?: EmbedBuilder;
+  content?: string;
+}) {
+  if (!textChannelId) return;
+
+  const channel = guild.channels.cache.get(textChannelId) ?? await guild.channels.fetch(textChannelId).catch(() => null);
+  if (!channel?.isTextBased()) return;
+
+  if (payload.embed) {
+    await channel.send({ embeds: [payload.embed] });
+    return;
+  }
+
+  if (payload.content) {
+    await channel.send({ content: payload.content });
+  }
+}
+
+function enableAutoListen(guildId: string, guild: NonNullable<ListenExecutionContext['guild']>, connection: VoiceConnection) {
+  disposeAutoListen(guildId);
+
+  const receiver = connection.receiver;
+  const controller = { dispose: () => {}, triggerActive: false };
+
+  const onSpeakingStart = (userId: string) => {
+    const session = getVoiceSession(guildId);
+    if (!session || session.listenMode !== 'auto') return;
+    if (userId !== session.createdByUserId) return;
+    if (session.botSpeaking || controller.triggerActive || getActiveGuildListenUser(guildId)) return;
+
+    controller.triggerActive = true;
+    void runListenTurn({
+      guildId,
+      guild,
+      requestUserId: userId,
+      connection,
+      session,
+      finishReply: async (payload) => {
+        const activeSession = getVoiceSession(guildId);
+        await sendAutoModeMessage(guild, activeSession?.autoListenTextChannelId ?? null, payload);
+      },
+    }).finally(() => {
+      controller.triggerActive = false;
+    });
+  };
+
+  receiver.speaking.on('start', onSpeakingStart);
+
+  controller.dispose = () => {
+    receiver.speaking.off('start', onSpeakingStart);
+  };
+
+  autoListenControllers.set(guildId, controller);
+}
+
+export async function handleJoinModeButton(interaction: ButtonInteraction) {
+  if (!interaction.customId.startsWith('voice-mode:')) return;
+
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.guild) return;
+
+  const session = getVoiceSession(guildId);
+  const connection = getVoiceConnection(guildId);
+  if (!session || !connection) {
+    await interaction.editReply({
+      content: 'The voice session is no longer active. Run `/join` again first.',
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
+
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member || member.voice.channelId !== connection.joinConfig.channelId) {
+    await interaction.followUp({
+      content: 'You need to be in the same voice channel as the bot to change the talk mode.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const nextMode = interaction.customId === VOICE_MODE_AUTO ? 'auto' : 'slash';
+  setVoiceSessionListenMode(guildId, nextMode, { textChannelId: interaction.channelId });
+
+  if (nextMode === 'auto') {
+    enableAutoListen(guildId, interaction.guild, connection);
+  } else {
+    disposeAutoListen(guildId);
+  }
+
+  const updatedSession = getVoiceSession(guildId);
+  if (!updatedSession) return;
+
+  await interaction.editReply({
+    embeds: [
+      buildJoinEmbed(updatedSession, {
+        channelId: connection.joinConfig.channelId,
+        created: false,
+        issues: summarizeHealthIssues(collectBridgeHealth()),
+      }),
+    ],
+    components: buildJoinModeButtons(updatedSession.listenMode),
+  });
 }
 
 export async function handleLeave(interaction: ChatInputCommandInteraction) {
@@ -702,6 +933,7 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
   }
 
   const session = getVoiceSession(interaction.guild.id);
+  disposeAutoListen(interaction.guild.id);
   connection.destroy();
 
   if (!session) {
@@ -775,6 +1007,8 @@ export function buildInfoEmbed(guildId: string | null, userId: string): EmbedBui
     joinUserId ? `Join setup by \`${joinUserId}\`` : 'No join in progress',
     listenUserId ? `Listen lock by \`${listenUserId}\`` : 'No active listen lock',
     connection?.joinConfig.channelId ? `Voice channel: <#${connection.joinConfig.channelId}>` : 'Voice channel: not connected',
+    session ? `Talk mode: ${session.listenMode === 'auto' ? 'Auto-listen (Beta)' : 'Slash-to-talk'}` : 'Talk mode: not set',
+    session?.botSpeaking ? 'Bot speech: active' : 'Bot speech: idle',
   ];
   const envLines = health.env.map((item) => `${statusLabel(item.ok)} ${item.name}`);
   const binaryLines = health.binaries.map((item) => `${statusLabel(item.ok)} ${item.name}`);

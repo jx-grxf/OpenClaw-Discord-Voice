@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { getVoiceConnections } from '@discordjs/voice';
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
-import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
+import { handleInfo, handleJoin, handleJoinModeButton, handleLeave, handleListen } from './discord/handlers.js';
 import { handleHelpButton, handleHelpCommand } from './discord/help.js';
 import { deleteOpenClawSessionWithRetry } from './openclaw.js';
 import { clearAllVoiceState, listVoiceSessions } from './state.js';
@@ -164,6 +164,11 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith('voice-mode:')) {
+        await handleJoinModeButton(interaction);
+        return;
+      }
+
       await handleHelpButton(interaction);
     }
 

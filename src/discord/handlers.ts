@@ -47,6 +47,29 @@ function statusLabel(ok: boolean): string {
   return ok ? 'OK' : 'MISSING';
 }
 
+function getNoAudioTimeoutMs(): number {
+  const raw = Number(process.env.VOICE_NO_AUDIO_TIMEOUT_MS ?? '');
+  return Number.isFinite(raw) && raw >= 3_000 ? raw : 12_000;
+}
+
+function getNoSpeechTimeoutMs(): number {
+  const raw = Number(process.env.VOICE_NO_SPEECH_TIMEOUT_MS ?? '');
+  return Number.isFinite(raw) && raw >= 2_000 ? raw : 5_000;
+}
+
+function getMaxCaptureMs(): number {
+  const raw = Number(process.env.VOICE_MAX_CAPTURE_MS ?? '');
+  return Number.isFinite(raw) && raw >= 4_000 ? raw : 9_000;
+}
+
+export function getListenTimingConfig() {
+  return {
+    noAudioTimeoutMs: getNoAudioTimeoutMs(),
+    noSpeechTimeoutMs: getNoSpeechTimeoutMs(),
+    maxCaptureMs: getMaxCaptureMs(),
+  };
+}
+
 export function redactSessionKey(sessionKey: string): string {
   return truncate(sessionKey, 24);
 }
@@ -271,6 +294,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     const log = (message: string, details?: Record<string, unknown>) => {
       console.log(logPrefix, message, details ?? {});
     };
+    const timing = getListenTimingConfig();
 
     const opusStream = receiver.subscribe(receiveUserId, {
       end: {
@@ -305,6 +329,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     let receivedPcmBytes = 0;
     let speakingStarted = false;
     let ssrcMapped = false;
+    let captureFinalized = false;
 
     const onSpeakingStart = (userId: string) => {
       if (userId !== receiveUserId) return;
@@ -333,15 +358,49 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       receiver.ssrcMap.off('create', onSsrcCreate);
     };
 
+    const stopCapture = (reason: string) => {
+      if (captureFinalized) return;
+      captureFinalized = true;
+      log('Stopping capture', {
+        reason,
+        ...buildListenLogDetails({
+          guildId,
+          channelId: connection.joinConfig.channelId,
+          speakingStarted,
+          ssrcMapped,
+          opusPackets: receivedOpusPackets,
+          opusBytes: receivedOpusBytes,
+          pcmBytes: receivedPcmBytes,
+          hasOpenClawSessionId: Boolean(session.openClawSessionId),
+          sessionKey: session.sessionKey,
+        }),
+      });
+      try {
+        opusStream.unpipe(decoder);
+      } catch {}
+      try {
+        decoder.unpipe(out);
+      } catch {}
+      try {
+        opusStream.destroy();
+      } catch {}
+      try {
+        decoder.end();
+      } catch {}
+      if (!out.destroyed && !out.writableEnded) {
+        out.end();
+      }
+    };
+
     const finishWithError = async (message: string) => {
       if (completed) return;
       completed = true;
       clearTimeout(noAudioTimer);
+      clearTimeout(noSpeechTimer);
+      clearTimeout(maxCaptureTimer);
       cleanupListeners();
       releaseListenLock();
-      try {
-        opusStream.destroy();
-      } catch {}
+      stopCapture('error');
       if (!out.destroyed) {
         out.destroy();
       }
@@ -361,7 +420,25 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       await finishWithError(
         'I did not receive any voice signal from you. Check that Discord voice activity or push-to-talk is actually sending audio, then try `/listen` again.',
       );
-    }, 12_000);
+    }, timing.noAudioTimeoutMs);
+
+    const noSpeechTimer = setTimeout(async () => {
+      if (completed || speakingStarted) return;
+      console.warn(logPrefix, 'No speech detected before timeout', {
+        guildId,
+        channelId: connection.joinConfig.channelId,
+        opusPackets: receivedOpusPackets,
+        sessionKeyPreview: redactSessionKey(session.sessionKey),
+      });
+      await finishWithError(
+        'I only received background audio or unclear noise, not clear speech. Try again and speak more directly into the mic.',
+      );
+    }, timing.noSpeechTimeoutMs);
+
+    const maxCaptureTimer = setTimeout(() => {
+      if (completed) return;
+      stopCapture('max-capture-timeout');
+    }, timing.maxCaptureMs);
 
     log('Receive pipeline started', {
       ...buildListenLogDetails({
@@ -374,6 +451,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       }),
       botReadyForReceive: Boolean(botMember.voice?.channelId) && botMember.voice?.selfDeaf === false,
       speakerChannelMatches: receiveMember?.voice?.channelId === connection.joinConfig.channelId,
+      timing,
     });
 
     opusStream.on('data', (chunk) => {
@@ -453,6 +531,9 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     out.on('finish', async () => {
       if (completed) return;
 
+      clearTimeout(maxCaptureTimer);
+      clearTimeout(noSpeechTimer);
+
       log('PCM file complete', {
         ...buildListenLogDetails({
           guildId,
@@ -513,6 +594,8 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
 
         completed = true;
         clearTimeout(noAudioTimer);
+        clearTimeout(noSpeechTimer);
+        clearTimeout(maxCaptureTimer);
         cleanupListeners();
         releaseListenLock();
         const replyEmbed = new EmbedBuilder()
@@ -546,6 +629,8 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
         console.error(logPrefix, 'Listen pipeline failed', error);
         completed = true;
         clearTimeout(noAudioTimer);
+        clearTimeout(noSpeechTimer);
+        clearTimeout(maxCaptureTimer);
         cleanupListeners();
         releaseListenLock();
         await interaction.followUp({

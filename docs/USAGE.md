@@ -49,12 +49,14 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 - Confirm your client is not muted and is actually transmitting audio.
 - Confirm the bot can stay undeafened in the channel and has the expected voice permissions.
 - Check the bot logs for `Speaking started`, `SSRC mapped`, and `First opus packet received`.
+- If the bot waits too long on room noise, lower `VOICE_MAX_CAPTURE_MS` or `VOICE_NO_SPEECH_TIMEOUT_MS`.
 
 ### No transcription
 
-- Check that `models/ggml-base.bin` exists.
+- Check that `WHISPER_MODEL_PATH` points to a real model file.
 - Check that `whisper-cli` is in `PATH`.
 - Check that `ffmpeg` is in `PATH`.
+- If you only speak one language most of the time, try setting `WHISPER_LANGUAGE=de` or `WHISPER_LANGUAGE=en`.
 
 ### No OpenClaw reply
 

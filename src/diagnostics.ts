@@ -19,6 +19,8 @@ export type BridgeHealth = {
 };
 
 export function getWhisperModelPath(): string {
+  const configured = process.env.WHISPER_MODEL_PATH?.trim();
+  if (configured) return path.resolve(process.cwd(), configured);
   return path.resolve(process.cwd(), 'models', 'ggml-base.bin');
 }
 

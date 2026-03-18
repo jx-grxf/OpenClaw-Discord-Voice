@@ -73,6 +73,11 @@ Text-to-speech settings:
 - `ELEVENLABS_VOICE_ID`: required when `TTS_PROVIDER=elevenlabs`
 - `ELEVENLABS_MODEL_ID`: optional, default `eleven_multilingual_v2`
 - `ELEVENLABS_OUTPUT_FORMAT`: optional, default `mp3_44100_128`
+- `WHISPER_MODEL_PATH`: optional, default `models/ggml-base.bin`
+- `WHISPER_LANGUAGE`: optional, default `auto`; set `de` or `en` if you want to force a language
+- `VOICE_NO_AUDIO_TIMEOUT_MS`: optional, default `12000`
+- `VOICE_NO_SPEECH_TIMEOUT_MS`: optional, default `5000`
+- `VOICE_MAX_CAPTURE_MS`: optional, default `9000`
 
 ## Quick start
 

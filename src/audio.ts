@@ -35,7 +35,13 @@ export async function transcribeWav(wavPath: string, transcriptBasePath: string)
   if (!fs.existsSync(modelPath)) throw new Error(`Whisper model missing: ${modelPath}`);
 
   return await new Promise<string>((resolve, reject) => {
-    const proc = spawn('whisper-cli', ['-m', modelPath, '-f', wavPath, '-otxt', '-of', transcriptBasePath], {
+    const args = ['-m', modelPath, '-f', wavPath, '-otxt', '-of', transcriptBasePath];
+    const language = process.env.WHISPER_LANGUAGE?.trim().toLowerCase();
+    if (language && language !== 'auto') {
+      args.push('-l', language);
+    }
+
+    const proc = spawn('whisper-cli', args, {
       cwd: process.cwd(),
     });
 

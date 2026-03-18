@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildListenLogDetails, handleJoin, redactSessionKey } from './handlers.js';
+import { buildListenLogDetails, getListenTimingConfig, handleJoin, redactSessionKey } from './handlers.js';
 
 test('handlers module exports join handler', () => {
   assert.equal(typeof handleJoin, 'function');
@@ -35,4 +35,16 @@ test('buildListenLogDetails redacts identifiers and keeps only coarse runtime st
     sessionKeyPreview: 'agent:main:discord:voic…',
   });
   assert.equal('receiveUserId' in details, false);
+});
+
+test('getListenTimingConfig returns sane defaults', () => {
+  delete process.env.VOICE_NO_AUDIO_TIMEOUT_MS;
+  delete process.env.VOICE_NO_SPEECH_TIMEOUT_MS;
+  delete process.env.VOICE_MAX_CAPTURE_MS;
+
+  assert.deepEqual(getListenTimingConfig(), {
+    noAudioTimeoutMs: 12_000,
+    noSpeechTimeoutMs: 5_000,
+    maxCaptureMs: 9_000,
+  });
 });

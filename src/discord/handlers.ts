@@ -6,13 +6,14 @@ import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord
 import {
   convertPcmToWav,
   createRequestTempDir,
+  getTtsOutputExtension,
   playAudioFile,
   removeRequestTempDir,
-  synthesizeWithSay,
+  synthesizeSpeech,
   transcribeWav,
 } from '../audio.js';
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
-import { askOpenClaw, createOpenClawSession, deleteOpenClawSession } from '../openclaw.js';
+import { askOpenClaw, createOpenClawSession, deleteOpenClawSession, deleteOpenClawSessionWithRetry } from '../openclaw.js';
 import {
   beginGuildJoin,
   beginGuildListen,
@@ -44,6 +45,29 @@ function summarizeSessionId(sessionId: string | null): string {
 
 function statusLabel(ok: boolean): string {
   return ok ? 'OK' : 'MISSING';
+}
+
+function getNoAudioTimeoutMs(): number {
+  const raw = Number(process.env.VOICE_NO_AUDIO_TIMEOUT_MS ?? '');
+  return Number.isFinite(raw) && raw >= 3_000 ? raw : 12_000;
+}
+
+function getNoSpeechTimeoutMs(): number {
+  const raw = Number(process.env.VOICE_NO_SPEECH_TIMEOUT_MS ?? '');
+  return Number.isFinite(raw) && raw >= 2_000 ? raw : 5_000;
+}
+
+function getMaxCaptureMs(): number {
+  const raw = Number(process.env.VOICE_MAX_CAPTURE_MS ?? '');
+  return Number.isFinite(raw) && raw >= 4_000 ? raw : 9_000;
+}
+
+export function getListenTimingConfig() {
+  return {
+    noAudioTimeoutMs: getNoAudioTimeoutMs(),
+    noSpeechTimeoutMs: getNoSpeechTimeoutMs(),
+    maxCaptureMs: getMaxCaptureMs(),
+  };
 }
 
 export function redactSessionKey(sessionKey: string): string {
@@ -104,6 +128,8 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
     return;
   }
 
+  const hadVoiceConnectionBeforeJoin = Boolean(getVoiceConnection(guildId));
+
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const connection = await getOrCreateConnectionFromMember(interaction);
@@ -115,6 +141,29 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
   let created = false;
 
   const channelId = connection.joinConfig.channelId;
+  if (session && !hadVoiceConnectionBeforeJoin) {
+    console.warn('Discarding stale voice session after reconnect', {
+      guildId,
+      previousChannelId: session.channelId,
+      requestedChannelId: channelId,
+    });
+    clearVoiceSession(guildId);
+    try {
+      await deleteOpenClawSessionWithRetry(session.sessionKey, {
+        attempts: 2,
+        timeoutMs: 10_000,
+        backoffMs: 500,
+      });
+    } catch (error) {
+      console.warn('Failed to clean up stale OpenClaw session after reconnect', {
+        guildId,
+        previousChannelId: session.channelId,
+        error: formatPipelineError(error),
+      });
+    }
+    session = null;
+  }
+
   if (session && channelId && session.channelId !== channelId) {
     console.warn('Discarding stale voice session for different channel', {
       guildId,
@@ -270,6 +319,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     const log = (message: string, details?: Record<string, unknown>) => {
       console.log(logPrefix, message, details ?? {});
     };
+    const timing = getListenTimingConfig();
 
     const opusStream = receiver.subscribe(receiveUserId, {
       end: {
@@ -295,7 +345,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     const pcmPath = path.join(requestTmpDir, 'input.pcm');
     const wavPath = path.join(requestTmpDir, 'input.wav');
     const transcriptBasePath = path.join(requestTmpDir, 'transcript');
-    const ttsPath = path.join(requestTmpDir, 'reply.aiff');
+    const ttsPath = path.join(requestTmpDir, `reply.${getTtsOutputExtension()}`);
     const out = fs.createWriteStream(pcmPath);
 
     let completed = false;
@@ -304,6 +354,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     let receivedPcmBytes = 0;
     let speakingStarted = false;
     let ssrcMapped = false;
+    let captureFinalized = false;
 
     const onSpeakingStart = (userId: string) => {
       if (userId !== receiveUserId) return;
@@ -332,15 +383,49 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       receiver.ssrcMap.off('create', onSsrcCreate);
     };
 
+    const stopCapture = (reason: string) => {
+      if (captureFinalized) return;
+      captureFinalized = true;
+      log('Stopping capture', {
+        reason,
+        ...buildListenLogDetails({
+          guildId,
+          channelId: connection.joinConfig.channelId,
+          speakingStarted,
+          ssrcMapped,
+          opusPackets: receivedOpusPackets,
+          opusBytes: receivedOpusBytes,
+          pcmBytes: receivedPcmBytes,
+          hasOpenClawSessionId: Boolean(session.openClawSessionId),
+          sessionKey: session.sessionKey,
+        }),
+      });
+      try {
+        opusStream.unpipe(decoder);
+      } catch {}
+      try {
+        decoder.unpipe(out);
+      } catch {}
+      try {
+        opusStream.destroy();
+      } catch {}
+      try {
+        decoder.end();
+      } catch {}
+      if (!out.destroyed && !out.writableEnded) {
+        out.end();
+      }
+    };
+
     const finishWithError = async (message: string) => {
       if (completed) return;
       completed = true;
       clearTimeout(noAudioTimer);
+      clearTimeout(noSpeechTimer);
+      clearTimeout(maxCaptureTimer);
       cleanupListeners();
       releaseListenLock();
-      try {
-        opusStream.destroy();
-      } catch {}
+      stopCapture('error');
       if (!out.destroyed) {
         out.destroy();
       }
@@ -360,7 +445,25 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       await finishWithError(
         'I did not receive any voice signal from you. Check that Discord voice activity or push-to-talk is actually sending audio, then try `/listen` again.',
       );
-    }, 12_000);
+    }, timing.noAudioTimeoutMs);
+
+    const noSpeechTimer = setTimeout(async () => {
+      if (completed || speakingStarted) return;
+      console.warn(logPrefix, 'No speech detected before timeout', {
+        guildId,
+        channelId: connection.joinConfig.channelId,
+        opusPackets: receivedOpusPackets,
+        sessionKeyPreview: redactSessionKey(session.sessionKey),
+      });
+      await finishWithError(
+        'I only received background audio or unclear noise, not clear speech. Try again and speak more directly into the mic.',
+      );
+    }, timing.noSpeechTimeoutMs);
+
+    const maxCaptureTimer = setTimeout(() => {
+      if (completed) return;
+      stopCapture('max-capture-timeout');
+    }, timing.maxCaptureMs);
 
     log('Receive pipeline started', {
       ...buildListenLogDetails({
@@ -373,6 +476,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       }),
       botReadyForReceive: Boolean(botMember.voice?.channelId) && botMember.voice?.selfDeaf === false,
       speakerChannelMatches: receiveMember?.voice?.channelId === connection.joinConfig.channelId,
+      timing,
     });
 
     opusStream.on('data', (chunk) => {
@@ -452,6 +556,9 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     out.on('finish', async () => {
       if (completed) return;
 
+      clearTimeout(maxCaptureTimer);
+      clearTimeout(noSpeechTimer);
+
       log('PCM file complete', {
         ...buildListenLogDetails({
           guildId,
@@ -500,7 +607,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
           hasOpenClawSessionId: Boolean(openClawResult.sessionId),
         });
 
-        await synthesizeWithSay(openClawResult.reply, ttsPath);
+        await synthesizeSpeech(openClawResult.reply, ttsPath);
         log('TTS synthesis finished', { ttsPath });
         await playAudioFile(connection, ttsPath);
         log('Reply playback finished');
@@ -512,6 +619,8 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
 
         completed = true;
         clearTimeout(noAudioTimer);
+        clearTimeout(noSpeechTimer);
+        clearTimeout(maxCaptureTimer);
         cleanupListeners();
         releaseListenLock();
         const replyEmbed = new EmbedBuilder()
@@ -545,6 +654,8 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
         console.error(logPrefix, 'Listen pipeline failed', error);
         completed = true;
         clearTimeout(noAudioTimer);
+        clearTimeout(noSpeechTimer);
+        clearTimeout(maxCaptureTimer);
         cleanupListeners();
         releaseListenLock();
         await interaction.followUp({
@@ -603,7 +714,11 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
   }
 
   try {
-    const deleted = await deleteOpenClawSession(session.sessionKey);
+    const deleted = await deleteOpenClawSessionWithRetry(session.sessionKey, {
+      attempts: 3,
+      timeoutMs: 15_000,
+      backoffMs: 1_000,
+    });
     clearVoiceSession(interaction.guild.id);
     const embed = new EmbedBuilder()
       .setTitle('Disconnected')

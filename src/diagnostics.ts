@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 export const REQUIRED_ENV_VARS = ['DISCORD_TOKEN', 'DISCORD_GUILD_ID'] as const;
-export const REQUIRED_BINARIES = ['openclaw', 'ffmpeg', 'whisper-cli', 'say'] as const;
+export const BASE_REQUIRED_BINARIES = ['openclaw', 'ffmpeg', 'whisper-cli'] as const;
 
 export type HealthCheck = {
   name: string;
@@ -19,7 +19,13 @@ export type BridgeHealth = {
 };
 
 export function getWhisperModelPath(): string {
+  const configured = process.env.WHISPER_MODEL_PATH?.trim();
+  if (configured) return path.resolve(process.cwd(), configured);
   return path.resolve(process.cwd(), 'models', 'ggml-base.bin');
+}
+
+function getTtsProvider(env: NodeJS.ProcessEnv): 'say' | 'elevenlabs' {
+  return env.TTS_PROVIDER?.trim().toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'say';
 }
 
 function checkBinary(name: string): HealthCheck {
@@ -33,13 +39,28 @@ function checkBinary(name: string): HealthCheck {
 }
 
 export function collectBridgeHealth(env: NodeJS.ProcessEnv = process.env): BridgeHealth {
-  const envChecks = REQUIRED_ENV_VARS.map((name) => ({
+  const envChecks: HealthCheck[] = REQUIRED_ENV_VARS.map((name) => ({
     name,
     ok: Boolean(env[name]),
     detail: env[name] ? 'set' : 'missing',
   }));
 
-  const binaryChecks = REQUIRED_BINARIES.map((name) => checkBinary(name));
+  const provider = getTtsProvider(env);
+  if (provider === 'elevenlabs') {
+    envChecks.push({
+      name: 'ELEVENLABS_API_KEY',
+      ok: Boolean(env.ELEVENLABS_API_KEY),
+      detail: env.ELEVENLABS_API_KEY ? 'set' : 'missing',
+    });
+    envChecks.push({
+      name: 'ELEVENLABS_VOICE_ID',
+      ok: Boolean(env.ELEVENLABS_VOICE_ID),
+      detail: env.ELEVENLABS_VOICE_ID ? 'set' : 'missing',
+    });
+  }
+
+  const requiredBinaries = [...BASE_REQUIRED_BINARIES, ...(provider === 'say' ? ['say'] : [])];
+  const binaryChecks = requiredBinaries.map((name) => checkBinary(name));
   const modelPath = getWhisperModelPath();
   const whisperModel = {
     name: 'Whisper model',

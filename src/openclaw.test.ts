@@ -4,6 +4,7 @@ import {
   buildOpenClawAgentParams,
   buildOpenClawSessionDeleteParams,
   buildOpenClawSessionResetParams,
+  deleteOpenClawSession,
   extractOpenClawReply,
   extractOpenClawSessionId,
   extractOpenClawSessionKey,
@@ -78,4 +79,8 @@ test('buildOpenClawSessionDeleteParams creates a delete request with transcript 
     key: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
     deleteTranscript: true,
   });
+});
+
+test('deleteOpenClawSession export remains callable', () => {
+  assert.equal(typeof deleteOpenClawSession, 'function');
 });

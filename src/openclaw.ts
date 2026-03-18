@@ -222,9 +222,12 @@ export async function createOpenClawSession(sessionKey: string): Promise<OpenCla
   };
 }
 
-export async function deleteOpenClawSession(sessionKey: string): Promise<OpenClawDeleteResult> {
+export async function deleteOpenClawSession(
+  sessionKey: string,
+  options: { timeoutMs?: number } = {},
+): Promise<OpenClawDeleteResult> {
   const raw = await runOpenClawGatewayCall('sessions.delete', buildOpenClawSessionDeleteParams(sessionKey), {
-    timeoutMs: 30_000,
+    timeoutMs: options.timeoutMs ?? 30_000,
   });
   const data = parseGatewayResponse(raw);
   if (!data?.ok) {
@@ -235,6 +238,33 @@ export async function deleteOpenClawSession(sessionKey: string): Promise<OpenCla
     deleted: Boolean(data.deleted),
     archived: data.archived ?? [],
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function deleteOpenClawSessionWithRetry(
+  sessionKey: string,
+  options: { attempts?: number; timeoutMs?: number; backoffMs?: number } = {},
+): Promise<OpenClawDeleteResult> {
+  const attempts = Math.max(1, options.attempts ?? 3);
+  const timeoutMs = options.timeoutMs ?? 15_000;
+  const backoffMs = options.backoffMs ?? 1_000;
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await deleteOpenClawSession(sessionKey, { timeoutMs });
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await sleep(backoffMs * attempt);
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('OpenClaw session deletion failed.');
 }
 
 export async function askOpenClaw(transcript: string, session: OpenClawSessionRef): Promise<OpenClawTurnResult> {

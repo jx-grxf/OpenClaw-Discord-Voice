@@ -47,8 +47,19 @@ Set:
 
 Optional:
 
+- `TTS_PROVIDER` to choose `say` or `elevenlabs`. Default: `say`
 - `TTS_VOICE` to choose the macOS `say` voice. Default: `Flo`
 - `TTS_RATE` to set the macOS `say` speaking rate. Default: `220`
+- `ELEVENLABS_API_KEY` if you use `TTS_PROVIDER=elevenlabs`
+- `ELEVENLABS_VOICE_ID` if you use `TTS_PROVIDER=elevenlabs`
+- `ELEVENLABS_MODEL_ID` optional, default `eleven_multilingual_v2`
+- `ELEVENLABS_OUTPUT_FORMAT` optional, default `mp3_44100_128`
+- `WHISPER_MODEL_PATH` optional, default `models/ggml-base.bin`
+- `WHISPER_LANGUAGE` optional, default `auto`; use `de` or `en` to force one language
+- `WHISPER_THREADS` optional; use it if you want to give `whisper-cli` more CPU threads
+- `VOICE_NO_AUDIO_TIMEOUT_MS` optional, default `12000`
+- `VOICE_NO_SPEECH_TIMEOUT_MS` optional, default `5000`
+- `VOICE_MAX_CAPTURE_MS` optional, default `9000`
 
 ## 4) Place the Whisper model
 
@@ -92,6 +103,28 @@ npm start
 ```
 
 The bot registers guild slash commands automatically on startup.
+
+## TTS providers
+
+Default:
+
+- `TTS_PROVIDER=say`
+- local macOS voice via `say`
+
+Optional:
+
+- `TTS_PROVIDER=elevenlabs`
+- requires `ELEVENLABS_API_KEY`
+- requires `ELEVENLABS_VOICE_ID`
+- does not require the local `say` binary for startup checks
+
+## Speech-to-text tuning
+
+Recommended for better accuracy:
+
+- point `WHISPER_MODEL_PATH` to a stronger Whisper model if your machine can handle it
+- leave `WHISPER_LANGUAGE=auto` if you switch between German and English
+- set `WHISPER_LANGUAGE=de` or `WHISPER_LANGUAGE=en` only if you want to optimize for one language
 
 ## Known setup caveats
 

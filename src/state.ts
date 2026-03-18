@@ -115,3 +115,9 @@ export function endGuildListen(guildId: string, discordUserId: string): void {
 export function getActiveGuildListenUser(guildId: string): string | null {
   return activeListenByGuild.get(guildId) ?? null;
 }
+
+export function clearAllVoiceState(): void {
+  activeSessionByGuild.clear();
+  activeListenByGuild.clear();
+  activeJoinByGuild.clear();
+}

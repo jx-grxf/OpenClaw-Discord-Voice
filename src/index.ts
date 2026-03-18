@@ -1,8 +1,10 @@
 import dotenv from 'dotenv';
+import { getVoiceConnections } from '@discordjs/voice';
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
 import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
 import { handleHelpButton, handleHelpCommand } from './discord/help.js';
+import { clearAllVoiceState } from './state.js';
 
 dotenv.config({ override: true });
 
@@ -38,6 +40,58 @@ async function registerCommands(applicationId: string) {
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+});
+
+let shutdownStarted = false;
+
+function destroyAllVoiceConnections() {
+  const connections = Array.from(getVoiceConnections().entries());
+  for (const [guildId, connection] of connections) {
+    try {
+      console.log('Destroying voice connection during shutdown', {
+        guildId,
+        channelId: connection.joinConfig.channelId,
+      });
+      connection.destroy();
+    } catch (error) {
+      console.error('Failed to destroy voice connection during shutdown', { guildId, error });
+    }
+  }
+}
+
+async function gracefulShutdown(signal: NodeJS.Signals | 'UNCAUGHT_EXCEPTION' | 'UNHANDLED_REJECTION') {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+
+  console.log(`Received ${signal}. Cleaning up Discord voice connections...`);
+
+  try {
+    destroyAllVoiceConnections();
+    clearAllVoiceState();
+    client.destroy();
+  } catch (error) {
+    console.error('Shutdown cleanup failed', error);
+  }
+
+  setTimeout(() => process.exit(0), 50).unref();
+}
+
+process.on('SIGINT', () => {
+  void gracefulShutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  void gracefulShutdown('SIGTERM');
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  void gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+  void gracefulShutdown('UNHANDLED_REJECTION');
 });
 
 client.once('clientReady', async () => {

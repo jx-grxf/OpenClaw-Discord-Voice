@@ -11,6 +11,8 @@ export type VoiceSessionState = {
   listenMode: 'slash' | 'auto';
   autoListenTextChannelId: string | null;
   botSpeaking: boolean;
+  verboseEnabled: boolean;
+  verboseThreadId: string | null;
 };
 
 const activeSessionByGuild = new Map<string, VoiceSessionState>();
@@ -42,6 +44,8 @@ export function createVoiceSession(
     listenMode: 'slash',
     autoListenTextChannelId: null,
     botSpeaking: false,
+    verboseEnabled: false,
+    verboseThreadId: null,
   };
 
   activeSessionByGuild.set(guildId, session);
@@ -94,6 +98,19 @@ export function setVoiceSessionBotSpeaking(guildId: string, speaking: boolean): 
   if (!session) return null;
 
   session.botSpeaking = speaking;
+  return session;
+}
+
+export function setVoiceSessionVerbose(
+  guildId: string,
+  enabled: boolean,
+  options: { threadId?: string | null } = {},
+): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.verboseEnabled = enabled;
+  session.verboseThreadId = enabled ? options.threadId?.trim() || session.verboseThreadId : null;
   return session;
 }
 

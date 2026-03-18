@@ -2,7 +2,15 @@ import dotenv from 'dotenv';
 import { getVoiceConnections } from '@discordjs/voice';
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
-import { handleInfo, handleJoin, handleJoinModeButton, handleLeave, handleListen } from './discord/handlers.js';
+import {
+  handleInfo,
+  handleJoin,
+  handleJoinModeButton,
+  handleLeave,
+  handleListen,
+  handleVoiceVerbose,
+  handleVoiceVerboseButton,
+} from './discord/handlers.js';
 import { handleHelpButton, handleHelpCommand } from './discord/help.js';
 import { deleteOpenClawSessionWithRetry } from './openclaw.js';
 import { clearAllVoiceState, listVoiceSessions } from './state.js';
@@ -29,6 +37,8 @@ const commands = [
   new SlashCommandBuilder().setName('listen').setDescription('Listen, transcribe, and reply in voice'),
   new SlashCommandBuilder().setName('info').setDescription('Show bridge status and dependency health'),
   new SlashCommandBuilder().setName('help').setDescription('Open the interactive help menu'),
+  new SlashCommandBuilder().setName('voice-verbose').setDescription('Configure verbose tool/thread streaming for the active voice session'),
+  new SlashCommandBuilder().setName('verbose').setDescription('Alias for /voice-verbose'),
 ].map((c) => c.toJSON());
 
 async function registerCommands(applicationId: string) {
@@ -159,6 +169,11 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      if (interaction.commandName === 'voice-verbose' || interaction.commandName === 'verbose') {
+        await handleVoiceVerbose(interaction);
+        return;
+      }
+
       await interaction.editReply('Unknown command.');
       return;
     }
@@ -166,6 +181,11 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('voice-mode:')) {
         await handleJoinModeButton(interaction);
+        return;
+      }
+
+      if (interaction.customId.startsWith('voice-verbose:')) {
+        await handleVoiceVerboseButton(interaction);
         return;
       }
 

@@ -14,6 +14,7 @@ import {
   markVoiceSessionUsed,
   setVoiceSessionBotSpeaking,
   setVoiceSessionListenMode,
+  setVoiceSessionVerbose,
 } from './state.js';
 
 test('buildVoiceSessionKey creates a guild-channel scoped ephemeral key', () => {
@@ -58,6 +59,22 @@ test('voice session bot speaking flag can be toggled', () => {
   assert.equal(getVoiceSession('guild-speaking')?.botSpeaking, false);
 
   clearVoiceSession('guild-speaking');
+});
+
+test('voice session verbose mode can bind a verbose thread', () => {
+  createVoiceSession('guild-verbose', 'channel-1', 'user-1');
+
+  const updated = setVoiceSessionVerbose('guild-verbose', true, { threadId: 'thread-1' });
+
+  assert(updated);
+  assert.equal(updated?.verboseEnabled, true);
+  assert.equal(updated?.verboseThreadId, 'thread-1');
+
+  setVoiceSessionVerbose('guild-verbose', false);
+  assert.equal(getVoiceSession('guild-verbose')?.verboseEnabled, false);
+  assert.equal(getVoiceSession('guild-verbose')?.verboseThreadId, null);
+
+  clearVoiceSession('guild-verbose');
 });
 
 test('markVoiceSessionUsed stores OpenClaw session details after a real turn', () => {

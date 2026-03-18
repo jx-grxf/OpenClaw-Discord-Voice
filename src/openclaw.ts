@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { WebSocket } from 'ws';
 
 type OpenClawPayload = {
   text?: string | null;
@@ -60,6 +61,15 @@ export type OpenClawTurnResult = {
   sessionId: string | null;
 };
 
+export type OpenClawVerboseEvent = {
+  runId: string;
+  seq: number;
+  stream: string;
+  ts: number;
+  data: Record<string, unknown>;
+  sessionKey?: string;
+};
+
 export type OpenClawSessionRef = {
   sessionKey: string;
   sessionId?: string | null;
@@ -73,6 +83,28 @@ export type OpenClawBootstrapResult = {
 export type OpenClawDeleteResult = {
   deleted: boolean;
   archived: string[];
+};
+
+type GatewayConnectEvent = {
+  type?: string;
+  event?: string;
+};
+
+type GatewayResponseFrame = {
+  type?: string;
+  id?: string;
+  ok?: boolean;
+  payload?: unknown;
+  error?: {
+    message?: string;
+    code?: string;
+  };
+};
+
+type GatewayEventFrame = {
+  type?: string;
+  event?: string;
+  payload?: unknown;
 };
 
 function firstNonEmpty(values: Array<string | null | undefined>): string | null {
@@ -226,6 +258,16 @@ export function buildOpenClawSessionDeleteParams(sessionKey: string): Record<str
   };
 }
 
+export function buildOpenClawSessionPatchParams(
+  sessionKey: string,
+  patch: { verboseLevel?: string | null },
+): Record<string, unknown> {
+  return {
+    key: sessionKey.trim(),
+    verboseLevel: typeof patch.verboseLevel === 'string' ? patch.verboseLevel.trim() : null,
+  };
+}
+
 export async function createOpenClawSession(sessionKey: string): Promise<OpenClawBootstrapResult> {
   const raw = await runOpenClawGatewayCall('sessions.reset', buildOpenClawSessionResetParams(sessionKey), {
     timeoutMs: 30_000,
@@ -241,22 +283,59 @@ export async function createOpenClawSession(sessionKey: string): Promise<OpenCla
   };
 }
 
+export async function setOpenClawSessionVerbose(sessionKey: string, verboseLevel: string | null): Promise<void> {
+  const data = await callOpenClawGatewayWs(
+    'sessions.patch',
+    buildOpenClawSessionPatchParams(sessionKey, { verboseLevel }),
+    { timeoutMs: 30_000 },
+  );
+  const payload = data as OpenClawGatewayResponse | undefined;
+  if (!payload?.ok) {
+    throw new Error('OpenClaw did not confirm the verbose setting update.');
+  }
+}
+
 export async function deleteOpenClawSession(
   sessionKey: string,
   options: { timeoutMs?: number } = {},
 ): Promise<OpenClawDeleteResult> {
-  const raw = await runOpenClawGatewayCall('sessions.delete', buildOpenClawSessionDeleteParams(sessionKey), {
-    timeoutMs: options.timeoutMs ?? 30_000,
-  });
-  const data = parseGatewayResponse(raw);
-  if (!data?.ok) {
-    throw new Error('OpenClaw did not confirm session deletion.');
-  }
+  try {
+    const payload = await callOpenClawGatewayWs(
+      'sessions.delete',
+      buildOpenClawSessionDeleteParams(sessionKey),
+      { timeoutMs: options.timeoutMs ?? 30_000 },
+    ) as OpenClawGatewayResponse | undefined;
 
-  return {
-    deleted: Boolean(data.deleted),
-    archived: data.archived ?? [],
-  };
+    if (!payload?.ok) {
+      throw new Error('OpenClaw did not confirm session deletion.');
+    }
+
+    return {
+      deleted: Boolean(payload.deleted),
+      archived: payload.archived ?? [],
+    };
+  } catch (gatewayError) {
+    try {
+      const raw = await runOpenClawGatewayCall('sessions.delete', buildOpenClawSessionDeleteParams(sessionKey), {
+        timeoutMs: options.timeoutMs ?? 30_000,
+      });
+      const data = parseGatewayResponse(raw);
+      if (!data?.ok) {
+        throw new Error('OpenClaw did not confirm session deletion.');
+      }
+
+      return {
+        deleted: Boolean(data.deleted),
+        archived: data.archived ?? [],
+      };
+    } catch (cliError) {
+      const gatewayMessage = gatewayError instanceof Error ? gatewayError.message : String(gatewayError);
+      const cliMessage = cliError instanceof Error ? cliError.message : String(cliError);
+      throw new Error(
+        `OpenClaw session deletion failed via gateway and CLI. Gateway: ${gatewayMessage}. CLI: ${cliMessage}`,
+      );
+    }
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -311,4 +390,284 @@ export async function askOpenClaw(transcript: string, session: OpenClawSessionRe
     sessionKey: extractOpenClawSessionKey(raw) ?? session.sessionKey,
     sessionId: extractOpenClawSessionId(raw) ?? session.sessionId ?? null,
   };
+}
+
+function resolveGatewayUrl(): string {
+  const explicit = process.env.OPENCLAW_GATEWAY_URL?.trim();
+  if (explicit) return explicit;
+
+  const port = process.env.OPENCLAW_GATEWAY_PORT?.trim() || '18789';
+  return `ws://127.0.0.1:${port}`;
+}
+
+function buildGatewayConnectRequest(id: string) {
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim();
+
+  return {
+    type: 'req',
+    id,
+    method: 'connect',
+    params: {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        id: 'gateway-client',
+        version: '1.0.0',
+        platform: 'discord-voice-assistant',
+        mode: 'backend',
+      },
+      role: 'operator',
+      scopes: ['operator.admin', 'operator.read', 'operator.write'],
+      caps: ['tool-events'],
+      auth: token ? { token } : password ? { password } : undefined,
+    },
+  };
+}
+
+async function connectGatewaySocket(timeoutMs = 10_000): Promise<WebSocket> {
+  return await new Promise<WebSocket>((resolve, reject) => {
+    const ws = new WebSocket(resolveGatewayUrl());
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error(`OpenClaw gateway connect timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+      ws.off('error', onError);
+      ws.off('close', onClose);
+    };
+
+    const fail = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+
+    const onError = () => {
+      fail(new Error('Could not open a WebSocket connection to the OpenClaw gateway.'));
+    };
+
+    const onClose = (code: number, reason: Buffer) => {
+      fail(new Error(`OpenClaw gateway closed during connect (${code}): ${reason.toString() || 'no reason'}`));
+    };
+
+    const onMessage = (rawData: Buffer) => {
+      let frame: GatewayConnectEvent | GatewayResponseFrame;
+      try {
+        frame = JSON.parse(rawData.toString()) as GatewayConnectEvent | GatewayResponseFrame;
+      } catch {
+        return;
+      }
+
+      if (frame.type === 'event' && 'event' in frame && frame.event === 'connect.challenge') {
+        ws.send(JSON.stringify(buildGatewayConnectRequest('gw-connect')));
+        return;
+      }
+
+      if (frame.type === 'res' && 'id' in frame && frame.id === 'gw-connect') {
+        if (!frame.ok) {
+          fail(new Error(`OpenClaw gateway connect failed: ${frame.error?.message || 'unknown error'}`));
+          return;
+        }
+
+        cleanup();
+        resolve(ws);
+      }
+    };
+
+    ws.on('message', onMessage);
+    ws.on('error', onError);
+    ws.on('close', onClose);
+  });
+}
+
+async function callOpenClawGatewayWs(
+  method: string,
+  params: Record<string, unknown>,
+  options: { timeoutMs?: number } = {},
+): Promise<unknown> {
+  const ws = await connectGatewaySocket(options.timeoutMs ?? 10_000);
+
+  try {
+    return await new Promise<unknown>((resolve, reject) => {
+      const requestId = `${method}-${randomUUID()}`;
+      const timer = setTimeout(() => {
+        cleanup();
+        ws.close();
+        reject(new Error(`OpenClaw gateway ${method} timed out after ${(options.timeoutMs ?? 10_000)}ms.`));
+      }, options.timeoutMs ?? 10_000);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        ws.off('message', onMessage);
+        ws.off('error', onError);
+        ws.off('close', onClose);
+      };
+
+      const fail = (error: Error) => {
+        cleanup();
+        ws.close();
+        reject(error);
+      };
+
+      const onError = () => {
+        fail(new Error(`The OpenClaw gateway disconnected during ${method}.`));
+      };
+
+      const onClose = (code: number, reason: Buffer) => {
+        fail(new Error(`OpenClaw gateway closed during ${method} (${code}): ${reason.toString() || 'no reason'}`));
+      };
+
+      const onMessage = (rawData: Buffer) => {
+        let frame: GatewayResponseFrame;
+        try {
+          frame = JSON.parse(rawData.toString()) as GatewayResponseFrame;
+        } catch {
+          return;
+        }
+
+        if (frame.type !== 'res' || frame.id !== requestId) {
+          return;
+        }
+
+        if (!frame.ok) {
+          fail(new Error(frame.error?.message || `OpenClaw gateway ${method} failed.`));
+          return;
+        }
+
+        cleanup();
+        ws.close();
+        resolve(frame.payload);
+      };
+
+      ws.on('message', onMessage);
+      ws.on('error', onError);
+      ws.on('close', onClose);
+      ws.send(JSON.stringify({
+        type: 'req',
+        id: requestId,
+        method,
+        params,
+      }));
+    });
+  } finally {
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close();
+    }
+  }
+}
+
+export async function askOpenClawWithVerbose(
+  transcript: string,
+  session: OpenClawSessionRef,
+  options: { onVerboseEvent?: (event: OpenClawVerboseEvent) => Promise<void> | void } = {},
+): Promise<OpenClawTurnResult> {
+  const message = transcript.trim();
+  if (!message) {
+    return {
+      reply: 'I could not understand anything yet. Please try again.',
+      sessionKey: session.sessionKey,
+      sessionId: session.sessionId ?? null,
+    };
+  }
+
+  const requestId = `agent-${randomUUID()}`;
+  const runId = `discord-voice-${randomUUID()}`;
+  const ws = await connectGatewaySocket();
+
+  try {
+    return await new Promise<OpenClawTurnResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        ws.close();
+        reject(new Error('OpenClaw verbose run timed out before a final response arrived.'));
+      }, 600_000);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        ws.off('message', onMessage);
+        ws.off('error', onError);
+        ws.off('close', onClose);
+      };
+
+      const fail = (error: Error) => {
+        cleanup();
+        ws.close();
+        reject(error);
+      };
+
+      const onError = () => {
+        fail(new Error('The OpenClaw verbose WebSocket disconnected during the agent run.'));
+      };
+
+      const onClose = (code: number, reason: Buffer) => {
+        fail(new Error(`OpenClaw verbose WebSocket closed (${code}): ${reason.toString() || 'no reason'}`));
+      };
+
+      const onMessage = (rawData: Buffer) => {
+        let frame: GatewayResponseFrame | GatewayEventFrame;
+        try {
+          frame = JSON.parse(rawData.toString()) as GatewayResponseFrame | GatewayEventFrame;
+        } catch {
+          return;
+        }
+
+        if (frame.type === 'event' && 'event' in frame && frame.event === 'agent') {
+          const payload = frame.payload as OpenClawVerboseEvent | undefined;
+          if (payload?.runId === runId && options.onVerboseEvent) {
+            void Promise.resolve(options.onVerboseEvent(payload)).catch(() => {});
+          }
+          return;
+        }
+
+        if (frame.type !== 'res' || !('id' in frame) || frame.id !== requestId) {
+          return;
+        }
+
+        if (!frame.ok) {
+          fail(new Error(frame.error?.message || 'OpenClaw agent request failed.'));
+          return;
+        }
+
+        const payload = frame.payload as { status?: string } | undefined;
+        if (payload?.status === 'accepted') {
+          return;
+        }
+
+        const raw = JSON.stringify(frame.payload ?? {});
+        const reply = extractOpenClawReply(raw);
+        if (!reply) {
+          fail(new Error('OpenClaw returned no usable reply.'));
+          return;
+        }
+
+        cleanup();
+        ws.close();
+        resolve({
+          reply,
+          sessionKey: extractOpenClawSessionKey(raw) ?? session.sessionKey,
+          sessionId: extractOpenClawSessionId(raw) ?? session.sessionId ?? null,
+        });
+      };
+
+      ws.on('message', onMessage);
+      ws.on('error', onError);
+      ws.on('close', onClose);
+      ws.send(JSON.stringify({
+        type: 'req',
+        id: requestId,
+        method: 'agent',
+        params: {
+          ...buildOpenClawAgentParams(message, session),
+          idempotencyKey: runId,
+        },
+      }));
+    });
+  } finally {
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close();
+    }
+  }
 }

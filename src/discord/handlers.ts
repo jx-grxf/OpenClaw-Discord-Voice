@@ -11,6 +11,8 @@ import {
   EmbedBuilder,
   Guild,
   MessageFlags,
+  TextChannel,
+  ThreadChannel,
 } from 'discord.js';
 import {
   convertPcmToWav,
@@ -22,7 +24,14 @@ import {
   transcribeWav,
 } from '../audio.js';
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
-import { askOpenClaw, createOpenClawSession, deleteOpenClawSession, deleteOpenClawSessionWithRetry } from '../openclaw.js';
+import {
+  askOpenClaw,
+  askOpenClawWithVerbose,
+  createOpenClawSession,
+  deleteOpenClawSession,
+  deleteOpenClawSessionWithRetry,
+  type OpenClawVerboseEvent,
+} from '../openclaw.js';
 import {
   beginGuildJoin,
   beginGuildListen,
@@ -35,6 +44,7 @@ import {
   getActiveGuildListenUser,
   getVoiceSession,
   markVoiceSessionUsed,
+  setVoiceSessionVerbose,
   setVoiceSessionBotSpeaking,
   setVoiceSessionListenMode,
 } from '../state.js';
@@ -42,7 +52,24 @@ import { formatAge, truncate } from '../utils.js';
 import { getOrCreateConnectionFromMember } from '../voice.js';
 
 function formatPipelineError(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (error instanceof Error && error.message.trim()) {
+    const message = error.message.trim();
+    const firstLine = message.split('\n').find((line) => line.trim())?.trim() ?? message;
+
+    if (message.includes('ETIMEDOUT') || message.includes('timed out')) {
+      return 'OpenClaw cleanup timed out before it could confirm the session deletion.';
+    }
+
+    if (message.includes('gateway closed') || message.includes('gateway connect failed')) {
+      return 'OpenClaw closed the cleanup connection before it could confirm the session deletion.';
+    }
+
+    if (message.includes('missing scope: operator.admin')) {
+      return 'OpenClaw denied the cleanup request because this local gateway token does not have the needed admin scope.';
+    }
+
+    return firstLine;
+  }
   return 'Unknown voice bridge error.';
 }
 
@@ -65,6 +92,8 @@ function formatLatency(ms: number): string {
 
 const VOICE_MODE_SLASH = 'voice-mode:slash';
 const VOICE_MODE_AUTO = 'voice-mode:auto';
+const VOICE_VERBOSE_ENABLE = 'voice-verbose:enable';
+const VOICE_VERBOSE_DISABLE = 'voice-verbose:disable';
 
 type ListenExecutionContext = {
   guildId: string;
@@ -77,6 +106,205 @@ type ListenExecutionContext = {
 };
 
 const autoListenControllers = new Map<string, { dispose: () => void; triggerActive: boolean }>();
+
+function buildVoiceVerboseButtons(active: boolean) {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(VOICE_VERBOSE_ENABLE)
+        .setLabel('Yes')
+        .setStyle(active ? ButtonStyle.Secondary : ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(VOICE_VERBOSE_DISABLE)
+        .setLabel('No')
+        .setStyle(active ? ButtonStyle.Danger : ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+function buildVoiceVerbosePromptEmbed(session: NonNullable<ReturnType<typeof getVoiceSession>>) {
+  const embed = new EmbedBuilder()
+    .setTitle('Voice verbose mode')
+    .setColor(session.verboseEnabled ? 0x5865f2 : 0xfee75c)
+    .setDescription('Do you want to activate verbose mode for this voice session?')
+    .addFields(
+      {
+        name: 'Session',
+        value: summarizeSessionKey(session.sessionKey),
+        inline: false,
+      },
+      {
+        name: 'Current status',
+        value: session.verboseEnabled
+          ? `Active${session.verboseThreadId ? ` in <#${session.verboseThreadId}>` : ''}`
+          : 'Inactive',
+        inline: false,
+      },
+      {
+        name: 'What it does',
+        value: 'Tool calls, verbose updates, and background execution details go into a separate Discord thread. Final voice replies still stay in the normal chat.',
+        inline: false,
+      },
+    );
+
+  return embed;
+}
+
+function buildVerboseValue(value: unknown): string {
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    const nested = value
+      .map((entry) => buildVerboseValue(entry))
+      .filter((entry) => entry.length > 0);
+    if (nested.length > 0) {
+      return nested.join('\n');
+    }
+  }
+  if (value && typeof value === 'object') {
+    const content = (value as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      const textParts = content
+        .flatMap((entry) => {
+          if (!entry || typeof entry !== 'object') return [];
+          const record = entry as { type?: unknown; text?: unknown };
+          return record.type === 'text' && typeof record.text === 'string' ? [record.text.trim()] : [];
+        })
+        .filter((entry) => entry.length > 0);
+      if (textParts.length > 0) {
+        return textParts.join('\n');
+      }
+    }
+
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return '';
+}
+
+function trimVerboseMessage(text: string, maxLength = 1_800): string {
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function formatVerboseEventMessage(event: OpenClawVerboseEvent): string | null {
+  const data = event.data ?? {};
+  const phase = typeof data.phase === 'string' ? data.phase : '';
+
+  if (event.stream === 'tool') {
+    const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'tool';
+    if (phase === 'start') {
+      const args = buildVerboseValue(data.args);
+      return trimVerboseMessage(
+        args
+          ? `**Tool start:** \`${name}\`\n\`\`\`json\n${args}\n\`\`\``
+          : `**Tool start:** \`${name}\``,
+      );
+    }
+
+    if (phase === 'update') {
+      const partial = buildVerboseValue(data.partialResult);
+      return trimVerboseMessage(
+        partial
+          ? `**Tool update:** \`${name}\`\n\`\`\`\n${partial}\n\`\`\``
+          : `**Tool update:** \`${name}\``,
+      );
+    }
+
+    if (phase === 'result') {
+      const result = buildVerboseValue(data.result);
+      const prefix = data.isError ? '**Tool error:**' : '**Tool result:**';
+      return trimVerboseMessage(
+        result
+          ? `${prefix} \`${name}\`\n\`\`\`\n${result}\n\`\`\``
+          : `${prefix} \`${name}\``,
+      );
+    }
+
+    return trimVerboseMessage(`**Tool event:** \`${name}\`${phase ? ` (${phase})` : ''}`);
+  }
+
+  if (event.stream === 'error') {
+    const detail = buildVerboseValue(data.error ?? data);
+    return trimVerboseMessage(detail ? `**Agent error**\n\`\`\`\n${detail}\n\`\`\`` : '**Agent error**');
+  }
+
+  if (event.stream === 'lifecycle' && (phase === 'fallback' || phase === 'error')) {
+    const detail = buildVerboseValue(data);
+    return trimVerboseMessage(`**Lifecycle:** \`${phase}\`\n\`\`\`json\n${detail}\n\`\`\``);
+  }
+
+  return null;
+}
+
+async function resolveVerboseThread(guild: Guild, threadId: string): Promise<ThreadChannel | null> {
+  const channel = guild.channels.cache.get(threadId) ?? await guild.channels.fetch(threadId).catch(() => null);
+  return channel instanceof ThreadChannel ? channel : null;
+}
+
+async function sendVerboseEventToThread(guild: Guild, threadId: string, event: OpenClawVerboseEvent): Promise<void> {
+  const content = formatVerboseEventMessage(event);
+  if (!content) return;
+
+  const thread = await resolveVerboseThread(guild, threadId);
+  if (!thread) return;
+
+  if (thread.archived && !thread.locked) {
+    await thread.setArchived(false).catch(() => {});
+  }
+
+  await thread.send({ content });
+}
+
+function getVerboseHostChannel(channel: ChatInputCommandInteraction['channel'] | ButtonInteraction['channel']): TextChannel | null {
+  if (!channel) return null;
+  if (channel instanceof TextChannel) return channel;
+  if (channel instanceof ThreadChannel && channel.parent instanceof TextChannel) return channel.parent;
+  return null;
+}
+
+async function ensureVerboseThread(
+  guild: Guild,
+  channel: ChatInputCommandInteraction['channel'] | ButtonInteraction['channel'],
+  session: NonNullable<ReturnType<typeof getVoiceSession>>,
+): Promise<ThreadChannel> {
+  if (session.verboseThreadId) {
+    const existing = await resolveVerboseThread(guild, session.verboseThreadId);
+    if (existing) {
+      if (existing.archived && !existing.locked) {
+        await existing.setArchived(false).catch(() => {});
+      }
+      return existing;
+    }
+  }
+
+  const hostChannel = getVerboseHostChannel(channel);
+  if (!hostChannel) {
+    throw new Error('Verbose mode needs a normal text channel so I can create a thread there.');
+  }
+
+  const starter = await hostChannel.send({
+    content: `Verbose mode stream for ${summarizeSessionKey(session.sessionKey)}`,
+  });
+  const thread = await starter.startThread({
+    name: `voice-verbose-${new Date().toISOString().slice(11, 16).replace(':', '-')}`,
+    autoArchiveDuration: 60,
+    reason: 'OpenClaw voice verbose stream',
+  });
+  await thread.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('Verbose mode active')
+        .setColor(0x5865f2)
+        .setDescription('Tool calls and background execution details for this voice session will appear here.'),
+    ],
+  });
+  return thread;
+}
 
 function buildJoinModeButtons(activeMode: 'slash' | 'auto') {
   return [
@@ -115,6 +343,13 @@ function buildJoinEmbed(session: NonNullable<ReturnType<typeof getVoiceSession>>
       {
         name: 'Mode',
         value: session.listenMode === 'auto' ? 'Auto-listen (Beta)' : 'Slash-to-talk',
+        inline: true,
+      },
+      {
+        name: 'Verbose',
+        value: session.verboseEnabled
+          ? session.verboseThreadId ? `On in <#${session.verboseThreadId}>` : 'On'
+          : 'Off',
         inline: true,
       },
       {
@@ -654,10 +889,23 @@ async function runListenTurn(context: ListenExecutionContext) {
           throw new Error('Audio arrived, but Whisper could not recognize any speech. Try speaking more clearly or a little louder.');
         }
 
-        const openClawResult = await askOpenClaw(transcript, {
-          sessionKey: session.sessionKey,
-          sessionId: session.openClawSessionId,
-        });
+        const openClawResult = session.verboseEnabled && session.verboseThreadId
+          ? await askOpenClawWithVerbose(
+              transcript,
+              {
+                sessionKey: session.sessionKey,
+                sessionId: session.openClawSessionId,
+              },
+              {
+                onVerboseEvent: async (event) => {
+                  await sendVerboseEventToThread(guild, session.verboseThreadId!, event);
+                },
+              },
+            )
+          : await askOpenClaw(transcript, {
+              sessionKey: session.sessionKey,
+              sessionId: session.openClawSessionId,
+            });
         log('OpenClaw turn finished', {
           sessionKeyPreview: redactSessionKey(openClawResult.sessionKey),
           hasOpenClawSessionId: Boolean(openClawResult.sessionId),
@@ -800,6 +1048,25 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
   });
 }
 
+export async function handleVoiceVerbose(interaction: ChatInputCommandInteraction) {
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.guild) {
+    await interaction.editReply({ content: 'This command only works inside a server.' });
+    return;
+  }
+
+  const session = getVoiceSession(guildId);
+  if (!session) {
+    await interaction.editReply({ content: 'No OpenClaw voice session is active yet. Run `/join` first.' });
+    return;
+  }
+
+  await interaction.editReply({
+    embeds: [buildVoiceVerbosePromptEmbed(session)],
+    components: buildVoiceVerboseButtons(session.verboseEnabled),
+  });
+}
+
 async function sendAutoModeMessage(guild: NonNullable<ListenExecutionContext['guild']>, textChannelId: string | null, payload: {
   embed?: EmbedBuilder;
   content?: string;
@@ -854,6 +1121,46 @@ function enableAutoListen(guildId: string, guild: NonNullable<ListenExecutionCon
   };
 
   autoListenControllers.set(guildId, controller);
+}
+
+export async function handleVoiceVerboseButton(interaction: ButtonInteraction) {
+  if (!interaction.customId.startsWith('voice-verbose:')) return;
+
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.guild) return;
+
+  const session = getVoiceSession(guildId);
+  if (!session) {
+    await interaction.editReply({
+      content: 'The voice session is no longer active. Run `/join` again first.',
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
+
+  const enable = interaction.customId === VOICE_VERBOSE_ENABLE;
+  if (!enable) {
+    const updated = setVoiceSessionVerbose(guildId, false);
+    if (!updated) return;
+
+    await interaction.editReply({
+      embeds: [buildVoiceVerbosePromptEmbed(updated)],
+      components: buildVoiceVerboseButtons(false),
+    });
+    return;
+  }
+
+  const thread = await ensureVerboseThread(interaction.guild, interaction.channel, session);
+  const updated = setVoiceSessionVerbose(guildId, true, { threadId: thread.id });
+  if (!updated) return;
+
+  await interaction.editReply({
+    embeds: [buildVoiceVerbosePromptEmbed(updated)],
+    components: buildVoiceVerboseButtons(true),
+  });
 }
 
 export async function handleJoinModeButton(interaction: ButtonInteraction) {
@@ -1008,6 +1315,9 @@ export function buildInfoEmbed(guildId: string | null, userId: string): EmbedBui
     listenUserId ? `Listen lock by \`${listenUserId}\`` : 'No active listen lock',
     connection?.joinConfig.channelId ? `Voice channel: <#${connection.joinConfig.channelId}>` : 'Voice channel: not connected',
     session ? `Talk mode: ${session.listenMode === 'auto' ? 'Auto-listen (Beta)' : 'Slash-to-talk'}` : 'Talk mode: not set',
+    session
+      ? `Verbose: ${session.verboseEnabled ? (session.verboseThreadId ? `<#${session.verboseThreadId}>` : 'active') : 'off'}`
+      : 'Verbose: not set',
     session?.botSpeaking ? 'Bot speech: active' : 'Bot speech: idle',
   ];
   const envLines = health.env.map((item) => `${statusLabel(item.ok)} ${item.name}`);

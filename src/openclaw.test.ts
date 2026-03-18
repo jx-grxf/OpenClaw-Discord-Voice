@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildOpenClawAgentParams,
+  buildOpenClawSessionPatchParams,
   buildOpenClawSessionDeleteParams,
   buildOpenClawSessionResetParams,
   deleteOpenClawSession,
@@ -119,6 +120,18 @@ test('buildOpenClawSessionDeleteParams creates a delete request with transcript 
   assert.deepEqual(params, {
     key: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
     deleteTranscript: true,
+  });
+});
+
+test('buildOpenClawSessionPatchParams creates a patch request for verbose mode', () => {
+  const params = buildOpenClawSessionPatchParams(
+    'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    { verboseLevel: 'full' },
+  );
+
+  assert.deepEqual(params, {
+    key: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    verboseLevel: 'full',
   });
 });
 

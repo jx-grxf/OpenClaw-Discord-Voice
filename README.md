@@ -64,10 +64,15 @@ Notes:
 - The bot derives the Discord application id from the logged-in bot session, so `DISCORD_CLIENT_ID` is no longer required.
 - Local `.env` values override exported shell variables to avoid accidentally reusing an old `DISCORD_TOKEN` from another project or terminal session.
 
-Optional text-to-speech settings:
+Text-to-speech settings:
 
+- `TTS_PROVIDER`: `say` or `elevenlabs`, default `say`
 - `TTS_VOICE`: macOS `say` voice name, default `Flo`
 - `TTS_RATE`: macOS `say` speaking rate, default `220`
+- `ELEVENLABS_API_KEY`: required when `TTS_PROVIDER=elevenlabs`
+- `ELEVENLABS_VOICE_ID`: required when `TTS_PROVIDER=elevenlabs`
+- `ELEVENLABS_MODEL_ID`: optional, default `eleven_multilingual_v2`
+- `ELEVENLABS_OUTPUT_FORMAT`: optional, default `mp3_44100_128`
 
 ## Quick start
 

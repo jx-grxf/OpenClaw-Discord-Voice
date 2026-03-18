@@ -47,8 +47,13 @@ Set:
 
 Optional:
 
+- `TTS_PROVIDER` to choose `say` or `elevenlabs`. Default: `say`
 - `TTS_VOICE` to choose the macOS `say` voice. Default: `Flo`
 - `TTS_RATE` to set the macOS `say` speaking rate. Default: `220`
+- `ELEVENLABS_API_KEY` if you use `TTS_PROVIDER=elevenlabs`
+- `ELEVENLABS_VOICE_ID` if you use `TTS_PROVIDER=elevenlabs`
+- `ELEVENLABS_MODEL_ID` optional, default `eleven_multilingual_v2`
+- `ELEVENLABS_OUTPUT_FORMAT` optional, default `mp3_44100_128`
 
 ## 4) Place the Whisper model
 
@@ -92,6 +97,20 @@ npm start
 ```
 
 The bot registers guild slash commands automatically on startup.
+
+## TTS providers
+
+Default:
+
+- `TTS_PROVIDER=say`
+- local macOS voice via `say`
+
+Optional:
+
+- `TTS_PROVIDER=elevenlabs`
+- requires `ELEVENLABS_API_KEY`
+- requires `ELEVENLABS_VOICE_ID`
+- does not require the local `say` binary for startup checks
 
 ## Known setup caveats
 

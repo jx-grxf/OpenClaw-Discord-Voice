@@ -66,7 +66,8 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 ### No playback
 
 - Check the bot's voice-channel permissions.
-- Check that `say` works on macOS with your chosen `TTS_VOICE` and `TTS_RATE`.
+- If `TTS_PROVIDER=say`, check that `say` works on macOS with your chosen `TTS_VOICE` and `TTS_RATE`.
+- If `TTS_PROVIDER=elevenlabs`, check that `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` are valid.
 
 ## Smoke test checklist
 

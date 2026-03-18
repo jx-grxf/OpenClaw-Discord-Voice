@@ -6,9 +6,10 @@ import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord
 import {
   convertPcmToWav,
   createRequestTempDir,
+  getTtsOutputExtension,
   playAudioFile,
   removeRequestTempDir,
-  synthesizeWithSay,
+  synthesizeSpeech,
   transcribeWav,
 } from '../audio.js';
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
@@ -295,7 +296,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     const pcmPath = path.join(requestTmpDir, 'input.pcm');
     const wavPath = path.join(requestTmpDir, 'input.wav');
     const transcriptBasePath = path.join(requestTmpDir, 'transcript');
-    const ttsPath = path.join(requestTmpDir, 'reply.aiff');
+    const ttsPath = path.join(requestTmpDir, `reply.${getTtsOutputExtension()}`);
     const out = fs.createWriteStream(pcmPath);
 
     let completed = false;
@@ -500,7 +501,7 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
           hasOpenClawSessionId: Boolean(openClawResult.sessionId),
         });
 
-        await synthesizeWithSay(openClawResult.reply, ttsPath);
+        await synthesizeSpeech(openClawResult.reply, ttsPath);
         log('TTS synthesis finished', { ttsPath });
         await playAudioFile(connection, ttsPath);
         log('Reply playback finished');

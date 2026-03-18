@@ -1,55 +1,13 @@
 import dotenv from 'dotenv';
-import https from 'node:https';
-import { collectBridgeHealth } from './diagnostics.js';
+import { checkDiscordBotAuth, collectBridgeHealth } from './diagnostics.js';
 
 dotenv.config({ override: true, quiet: true });
-
-type DiscordAuthCheck = {
-  ok: boolean;
-  detail: string;
-};
 
 type DoctorRow = {
   label: string;
   ok: boolean;
   detail: string;
 };
-
-function checkDiscordAuth(token: string): Promise<DiscordAuthCheck> {
-  return new Promise((resolve) => {
-    const req = https.request(
-      {
-        hostname: 'discord.com',
-        path: '/api/v10/users/@me',
-        method: 'GET',
-        headers: { Authorization: `Bot ${token}` },
-      },
-      (res) => {
-        let body = '';
-        res.on('data', (chunk) => {
-          body += chunk.toString();
-        });
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            resolve({ ok: true, detail: 'Discord bot auth succeeded.' });
-            return;
-          }
-
-          resolve({
-            ok: false,
-            detail: `Discord auth failed with status ${res.statusCode ?? 'unknown'}: ${body || 'no response body'}`,
-          });
-        });
-      },
-    );
-
-    req.on('error', (error) => {
-      resolve({ ok: false, detail: `Discord auth request failed: ${error.message}` });
-    });
-
-    req.end();
-  });
-}
 
 function printSection(title: string, rows: DoctorRow[]) {
   console.log(`\n== ${title} ==`);
@@ -65,7 +23,9 @@ function printSection(title: string, rows: DoctorRow[]) {
 async function main() {
   const health = collectBridgeHealth(process.env);
   const token = process.env.DISCORD_TOKEN?.trim() || '';
-  const discordAuth = token ? await checkDiscordAuth(token) : { ok: false, detail: 'DISCORD_TOKEN is missing.' };
+  const discordAuth = token
+    ? await checkDiscordBotAuth(token)
+    : { name: 'Discord bot auth', ok: false, detail: 'DISCORD_TOKEN is missing.' };
   const envRows: DoctorRow[] = health.env.map((item) => ({
     label: item.name,
     ok: item.ok,
@@ -87,7 +47,7 @@ async function main() {
     {
       label: 'Bot authentication',
       ok: discordAuth.ok,
-      detail: discordAuth.detail,
+      detail: discordAuth.ok ? 'succeeded' : discordAuth.detail,
     },
   ];
 

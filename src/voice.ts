@@ -12,6 +12,45 @@ import {
   StringSelectMenuInteraction,
 } from 'discord.js';
 
+async function replyInteractionError(
+  interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction,
+  message: string,
+) {
+  if ('deferred' in interaction && interaction.deferred) {
+    await interaction.editReply({ content: message, embeds: [], components: [] });
+    return;
+  }
+
+  if (interaction.isRepliable()) {
+    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+  }
+}
+
+function formatVoiceJoinError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/ip discovery/i.test(message)) {
+    return 'Discord voice networking failed while joining. Try `/join` again, or leave and rejoin the voice channel first.';
+  }
+  if (/aborted/i.test(message)) {
+    return 'The voice connection was interrupted while joining. Wait a moment, then try `/join` again.';
+  }
+  return `Joining the voice channel failed: ${message}`;
+}
+
+function createVoiceConnection(
+  guildId: string,
+  channelId: string,
+  adapterCreator: Parameters<typeof joinVoiceChannel>[0]['adapterCreator'],
+) {
+  return joinVoiceChannel({
+    channelId,
+    guildId,
+    adapterCreator,
+    selfDeaf: false,
+    selfMute: false,
+  });
+}
+
 export async function getOrCreateConnectionFromMember(
   interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction,
 ): Promise<VoiceConnection | null> {
@@ -25,33 +64,23 @@ export async function getOrCreateConnectionFromMember(
     return null;
   }
 
-  const member = await guild.members.fetch(interaction.user.id);
+  let member;
+  try {
+    member = await guild.members.fetch(interaction.user.id);
+  } catch (error) {
+    console.error('Failed to fetch guild member for voice join', error);
+    await replyInteractionError(interaction, 'I could not inspect your voice state in Discord. Try again in a moment.');
+    return null;
+  }
   const channel = member.voice.channel;
   if (!channel) {
     const message = 'Join a voice channel first, then try again.';
-    if ('deferred' in interaction && interaction.deferred) {
-      await interaction.editReply({ content: message, embeds: [], components: [] });
-    } else {
-      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
-    }
+    await replyInteractionError(interaction, message);
     return null;
   }
 
-  let connection = getVoiceConnection(guild.id);
-  if (!connection) {
-    console.log('Creating voice connection', {
-      guildId: guild.id,
-      channelId: channel.id,
-      userId: interaction.user.id,
-    });
-    connection = joinVoiceChannel({
-      channelId: channel.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false,
-    });
-  } else if (connection.joinConfig.channelId !== channel.id) {
+  let connection: VoiceConnection | null = getVoiceConnection(guild.id) ?? null;
+  if (connection && connection.joinConfig.channelId !== channel.id) {
     console.log('Rejected voice connection move', {
       guildId: guild.id,
       fromChannelId: connection.joinConfig.channelId,
@@ -67,18 +96,45 @@ export async function getOrCreateConnectionFromMember(
     return null;
   }
 
-  try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-  } catch (error) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      connection.destroy();
-    } catch {}
-    throw error;
+      if (!connection) {
+        console.log('Creating voice connection', {
+          guildId: guild.id,
+          channelId: channel.id,
+          userId: interaction.user.id,
+          attempt: attempt + 1,
+        });
+        connection = createVoiceConnection(guild.id, channel.id, guild.voiceAdapterCreator);
+      }
+
+      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+      console.log('Voice connection ready', {
+        guildId: guild.id,
+        channelId: channel.id,
+        userId: interaction.user.id,
+      });
+      return connection;
+    } catch (error) {
+      console.error('Voice connection failed', {
+        guildId: guild.id,
+        channelId: channel.id,
+        userId: interaction.user.id,
+        attempt: attempt + 1,
+        error,
+      });
+      if (connection) {
+        try {
+          connection.destroy();
+        } catch {}
+        connection = null;
+      }
+      if (attempt === 1) {
+        await replyInteractionError(interaction, formatVoiceJoinError(error));
+        return null;
+      }
+    }
   }
-  console.log('Voice connection ready', {
-    guildId: guild.id,
-    channelId: channel.id,
-    userId: interaction.user.id,
-  });
-  return connection;
+
+  return null;
 }

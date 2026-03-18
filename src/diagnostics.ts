@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -51,6 +52,43 @@ export function collectBridgeHealth(env: NodeJS.ProcessEnv = process.env): Bridg
     binaries: binaryChecks,
     whisperModel,
   };
+}
+
+export function checkDiscordBotAuth(token: string): Promise<HealthCheck> {
+  return new Promise((resolve) => {
+    const req = https.request(
+      {
+        hostname: 'discord.com',
+        path: '/api/v10/users/@me',
+        method: 'GET',
+        headers: { Authorization: `Bot ${token}` },
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk.toString();
+        });
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve({ name: 'Discord bot auth', ok: true, detail: 'succeeded' });
+            return;
+          }
+
+          resolve({
+            name: 'Discord bot auth',
+            ok: false,
+            detail: `failed with status ${res.statusCode ?? 'unknown'}: ${body || 'no response body'}`,
+          });
+        });
+      },
+    );
+
+    req.on('error', (error) => {
+      resolve({ name: 'Discord bot auth', ok: false, detail: `request failed: ${error.message}` });
+    });
+
+    req.end();
+  });
 }
 
 export function summarizeHealthIssues(health: BridgeHealth): string[] {

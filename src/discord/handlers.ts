@@ -42,6 +42,10 @@ function summarizeSessionId(sessionId: string | null): string {
   return sessionId ? `\`${truncate(sessionId, 48)}\`` : 'Not reported yet';
 }
 
+function statusLabel(ok: boolean): string {
+  return ok ? 'OK' : 'MISSING';
+}
+
 function formatSessionStatus(guildId: string | null, userId: string): string {
   if (!guildId) return 'No voice session has been prepared for you yet.';
   const joinUserId = getActiveGuildJoinUser(guildId);
@@ -555,57 +559,84 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
   }
 }
 
-export async function handleInfo(interaction: ChatInputCommandInteraction) {
+export function buildInfoEmbed(guildId: string | null, userId: string): EmbedBuilder {
   const health = collectBridgeHealth();
   const issues = summarizeHealthIssues(health);
-  const connection = interaction.guild ? getVoiceConnection(interaction.guild.id) : null;
-  const session = interaction.guildId ? getVoiceSession(interaction.guildId) : null;
-  const joinUserId = interaction.guildId ? getActiveGuildJoinUser(interaction.guildId) : null;
-  const listenUserId = interaction.guildId ? getActiveGuildListenUser(interaction.guildId) : null;
+  const connection = guildId ? getVoiceConnection(guildId) : null;
+  const session = guildId ? getVoiceSession(guildId) : null;
+  const joinUserId = guildId ? getActiveGuildJoinUser(guildId) : null;
+  const listenUserId = guildId ? getActiveGuildListenUser(guildId) : null;
+  const sessionLines = session
+    ? [
+        `Key: ${summarizeSessionKey(session.sessionKey)}`,
+        `Id: ${summarizeSessionId(session.openClawSessionId)}`,
+        `Created by: \`${session.createdByUserId}\``,
+        `Age: ${formatAge(Date.now() - session.createdAt)}`,
+        session.lastUsedAt ? `Last used: ${formatAge(Date.now() - session.lastUsedAt)}` : 'Last used: not yet',
+      ]
+    : [formatSessionStatus(guildId, userId)];
+  const activityLines = [
+    joinUserId ? `Join setup by \`${joinUserId}\`` : 'No join in progress',
+    listenUserId ? `Listen lock by \`${listenUserId}\`` : 'No active listen lock',
+    connection?.joinConfig.channelId ? `Voice channel: <#${connection.joinConfig.channelId}>` : 'Voice channel: not connected',
+  ];
+  const envLines = health.env.map((item) => `${statusLabel(item.ok)} ${item.name}`);
+  const binaryLines = health.binaries.map((item) => `${statusLabel(item.ok)} ${item.name}`);
 
   const embed = new EmbedBuilder()
     .setTitle('Bridge status')
     .setColor(issues.length ? 0xed4245 : 0x57f287)
-    .setDescription('Current Discord, OpenClaw, and local runtime status.')
+    .setDescription(
+      issues.length
+        ? 'Bridge is running with warnings. Check the issue summary below.'
+        : 'Bridge is healthy and ready for the next voice turn.',
+    )
     .addFields(
       {
-        name: 'Voice',
-        value: connection
-          ? `Connected to <#${connection.joinConfig.channelId}>`
-          : 'Not connected',
-      },
-      {
-        name: 'Session',
-        value: formatSessionStatus(interaction.guildId, interaction.user.id).slice(0, 1024),
-      },
-      {
-        name: 'Activity',
+        name: 'Overview',
         value: [
-          joinUserId ? `Join in progress by \`${joinUserId}\`` : 'No join in progress',
-          listenUserId ? `Listen lock held by \`${listenUserId}\`` : 'No active listen lock',
-          session?.createdAt ? `Session age: ${formatAge(Date.now() - session.createdAt)}` : 'No active session age',
+          connection ? 'Voice: connected' : 'Voice: not connected',
+          session ? 'Session: active' : joinUserId ? 'Session: preparing' : 'Session: idle',
+          issues.length ? `Runtime: ${issues.length} warning(s)` : 'Runtime: healthy',
         ].join('\n'),
       },
       {
+        name: 'Session',
+        value: sessionLines.join('\n').slice(0, 1024),
+      },
+      {
+        name: 'Activity',
+        value: activityLines.join('\n'),
+      },
+      {
         name: 'Env',
-        value: health.env.map((item) => `${item.ok ? 'OK' : 'MISSING'} ${item.name}`).join('\n'),
+        value: envLines.join('\n'),
+        inline: true,
       },
       {
         name: 'Binaries',
-        value: health.binaries.map((item) => `${item.ok ? 'OK' : 'MISSING'} ${item.name}`).join('\n'),
+        value: binaryLines.join('\n'),
+        inline: true,
       },
       {
         name: 'Whisper',
-        value: `${health.whisperModel.ok ? 'OK' : 'MISSING'} ${health.whisperModel.detail}`,
+        value: `${statusLabel(health.whisperModel.ok)} ${health.whisperModel.detail}`,
+        inline: true,
       },
-    );
+    )
+    .setFooter({ text: 'Use /join to prepare a session and /listen to capture one turn.' })
+    .setTimestamp();
 
   if (issues.length) {
     embed.addFields({
-      name: 'Issues',
+      name: 'Issue summary',
       value: issues.map((issue) => `- ${issue}`).join('\n').slice(0, 1024),
     });
   }
 
-  await interaction.editReply({ embeds: [embed] });
+  return embed;
+}
+
+export async function handleInfo(interaction: ChatInputCommandInteraction) {
+  await interaction.editReply({ embeds: [buildInfoEmbed(interaction.guildId, interaction.user.id)] });
 }

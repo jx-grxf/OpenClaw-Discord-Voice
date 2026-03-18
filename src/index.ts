@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
 import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
+import { handleHelpButton, handleHelpCommand } from './discord/help.js';
 
 dotenv.config({ override: true });
 
@@ -24,6 +25,7 @@ const commands = [
   new SlashCommandBuilder().setName('leave').setDescription('Leave current voice channel'),
   new SlashCommandBuilder().setName('listen').setDescription('Listen, transcribe, and reply in voice'),
   new SlashCommandBuilder().setName('info').setDescription('Show bridge status and dependency health'),
+  new SlashCommandBuilder().setName('help').setDescription('Open the interactive help menu'),
 ].map((c) => c.toJSON());
 
 async function registerCommands(applicationId: string) {
@@ -60,6 +62,11 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      if (interaction.commandName === 'help') {
+        await handleHelpCommand(interaction);
+        return;
+      }
+
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       if (interaction.commandName === 'leave') {
@@ -78,6 +85,11 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       await interaction.editReply('Unknown command.');
+      return;
+    }
+
+    if (interaction.isButton()) {
+      await handleHelpButton(interaction);
     }
 
   } catch (err) {

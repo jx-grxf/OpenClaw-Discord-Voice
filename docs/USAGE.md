@@ -15,6 +15,7 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 - `/listen` - process exactly one spoken turn from the invoking user
 - `/leave` - disconnect the voice connection
 - `/info` - show voice status, in-memory session status, and dependency health
+- `/help` - open the interactive help menu with buttons for Commands, Info, and Doctor
 - `/ping` - simple reachability check
 
 ## Session behavior
@@ -39,6 +40,7 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 
 - Make sure you are in a voice channel.
 - Run `/info` and check for missing dependencies.
+- Run `/help` -> `Doctor` or `npm run doctor:bridge` for a full bridge health check.
 
 ### `/listen` says no voice signal was received
 
@@ -72,9 +74,9 @@ This is still a manual end-to-end check:
 
 1. Run `npm run build`.
 2. Run `npm start`.
-3. In Discord, run `/info` and confirm all dependencies show as `OK`.
+3. In Discord, run `/info` or `/help` -> `Doctor` and confirm all dependencies show as `OK`.
 4. Join a normal voice channel and run `/join`.
-5. Confirm `/join` shows an OpenClaw key and says the real session is only exercised on first successful listen.
+5. Confirm `/join` shows an OpenClaw key and session id for the newly created voice session.
 6. Run `/listen`, wait for the prompt, then speak one short sentence.
 7. Confirm the reply shows your transcript and the same OpenClaw key/session id that `/join` created.
 8. Optionally run `openclaw sessions` locally and confirm the voice session exists while connected.

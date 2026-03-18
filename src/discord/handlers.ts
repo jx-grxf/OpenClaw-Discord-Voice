@@ -46,6 +46,36 @@ function statusLabel(ok: boolean): string {
   return ok ? 'OK' : 'MISSING';
 }
 
+export function redactSessionKey(sessionKey: string): string {
+  return truncate(sessionKey, 24);
+}
+
+export function buildListenLogDetails(details: {
+  guildId: string;
+  channelId: string | null;
+  speakingStarted: boolean;
+  ssrcMapped: boolean;
+  opusPackets?: number;
+  opusBytes?: number;
+  pcmBytes?: number;
+  transcriptLength?: number;
+  hasOpenClawSessionId?: boolean;
+  sessionKey: string;
+}) {
+  return {
+    guildId: details.guildId,
+    channelId: details.channelId,
+    speakingStarted: details.speakingStarted,
+    ssrcMapped: details.ssrcMapped,
+    opusPackets: details.opusPackets,
+    opusBytes: details.opusBytes,
+    pcmBytes: details.pcmBytes,
+    transcriptLength: details.transcriptLength,
+    hasOpenClawSessionId: details.hasOpenClawSessionId ?? false,
+    sessionKeyPreview: redactSessionKey(details.sessionKey),
+  };
+}
+
 function formatSessionStatus(guildId: string | null, userId: string): string {
   if (!guildId) return 'No voice session has been prepared for you yet.';
   const joinUserId = getActiveGuildJoinUser(guildId);
@@ -84,6 +114,26 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
   let session = getVoiceSession(guildId);
   let created = false;
 
+  const channelId = connection.joinConfig.channelId;
+  if (session && channelId && session.channelId !== channelId) {
+    console.warn('Discarding stale voice session for different channel', {
+      guildId,
+      previousChannelId: session.channelId,
+      requestedChannelId: channelId,
+    });
+    clearVoiceSession(guildId);
+    try {
+      await deleteOpenClawSession(session.sessionKey);
+    } catch (error) {
+      console.warn('Failed to clean up stale OpenClaw session before recreating', {
+        guildId,
+        previousChannelId: session.channelId,
+        error: formatPipelineError(error),
+      });
+    }
+    session = null;
+  }
+
   if (!session) {
     const joinLock = beginGuildJoin(guildId, interaction.user.id);
     if (!joinLock.ok) {
@@ -92,8 +142,6 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
       });
       return;
     }
-
-    const channelId = connection.joinConfig.channelId;
     try {
       if (!channelId) {
         connection.destroy();
@@ -304,10 +352,10 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       if (completed || receivedOpusPackets > 0) return;
       console.warn(logPrefix, 'No audio received before timeout', {
         guildId: interaction.guild?.id,
-        interactionUserId: interaction.user.id,
-        receiveUserId,
+        channelId: connection.joinConfig.channelId,
         speakingStarted,
         ssrcMapped,
+        sessionKeyPreview: redactSessionKey(session.sessionKey),
       });
       await finishWithError(
         'I did not receive any voice signal from you. Check that Discord voice activity or push-to-talk is actually sending audio, then try `/listen` again.',
@@ -315,27 +363,16 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
     }, 12_000);
 
     log('Receive pipeline started', {
-      guildId: interaction.guild.id,
-      channelId: connection.joinConfig.channelId,
-      interactionUserId: interaction.user.id,
-      receiveUserId,
-      sessionKey: session.sessionKey,
-      botVoiceState: botMember.voice ? {
-        channelId: botMember.voice.channelId,
-        selfMute: botMember.voice.selfMute,
-        selfDeaf: botMember.voice.selfDeaf,
-        serverMute: botMember.voice.serverMute,
-        serverDeaf: botMember.voice.serverDeaf,
-        suppress: botMember.voice.suppress,
-      } : null,
-      receiveMemberVoiceState: receiveMember?.voice ? {
-        channelId: receiveMember.voice.channelId,
-        selfMute: receiveMember.voice.selfMute,
-        selfDeaf: receiveMember.voice.selfDeaf,
-        serverMute: receiveMember.voice.serverMute,
-        serverDeaf: receiveMember.voice.serverDeaf,
-        suppress: receiveMember.voice.suppress,
-      } : null,
+      ...buildListenLogDetails({
+        guildId: interaction.guild.id,
+        channelId: connection.joinConfig.channelId,
+        speakingStarted,
+        ssrcMapped,
+        hasOpenClawSessionId: Boolean(session.openClawSessionId),
+        sessionKey: session.sessionKey,
+      }),
+      botReadyForReceive: Boolean(botMember.voice?.channelId) && botMember.voice?.selfDeaf === false,
+      speakerChannelMatches: receiveMember?.voice?.channelId === connection.joinConfig.channelId,
     });
 
     opusStream.on('data', (chunk) => {
@@ -344,14 +381,28 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       if (receivedOpusPackets === 1) {
         clearTimeout(noAudioTimer);
         log('First opus packet received', {
+          ...buildListenLogDetails({
+            guildId,
+            channelId: connection.joinConfig.channelId,
+            speakingStarted,
+            ssrcMapped,
+            opusPackets: receivedOpusPackets,
+            opusBytes: receivedOpusBytes,
+            sessionKey: session.sessionKey,
+          }),
           bytes: chunk.length,
-          speakingStarted,
-          ssrcMapped,
         });
       } else if (receivedOpusPackets % 50 === 0) {
         log('Still receiving opus packets', {
-          opusPackets: receivedOpusPackets,
-          opusBytes: receivedOpusBytes,
+          ...buildListenLogDetails({
+            guildId,
+            channelId: connection.joinConfig.channelId,
+            speakingStarted,
+            ssrcMapped,
+            opusPackets: receivedOpusPackets,
+            opusBytes: receivedOpusBytes,
+            sessionKey: session.sessionKey,
+          }),
         });
       }
     });
@@ -362,9 +413,16 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
 
     opusStream.on('end', () => {
       log('Opus stream ended', {
-        opusPackets: receivedOpusPackets,
-        opusBytes: receivedOpusBytes,
-        pcmBytes: receivedPcmBytes,
+        ...buildListenLogDetails({
+          guildId,
+          channelId: connection.joinConfig.channelId,
+          speakingStarted,
+          ssrcMapped,
+          opusPackets: receivedOpusPackets,
+          opusBytes: receivedOpusBytes,
+          pcmBytes: receivedPcmBytes,
+          sessionKey: session.sessionKey,
+        }),
       });
     });
 
@@ -395,9 +453,16 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       if (completed) return;
 
       log('PCM file complete', {
-        opusPackets: receivedOpusPackets,
-        opusBytes: receivedOpusBytes,
-        pcmBytes: receivedPcmBytes,
+        ...buildListenLogDetails({
+          guildId,
+          channelId: connection.joinConfig.channelId,
+          speakingStarted,
+          ssrcMapped,
+          opusPackets: receivedOpusPackets,
+          opusBytes: receivedOpusBytes,
+          pcmBytes: receivedPcmBytes,
+          sessionKey: session.sessionKey,
+        }),
         pcmPath,
       });
 
@@ -413,7 +478,15 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
         log('Converted PCM to WAV', { wavPath });
 
         const transcript = await transcribeWav(wavPath, transcriptBasePath);
-        log('Transcription finished', { transcriptLength: transcript.length });
+        log('Transcription finished', buildListenLogDetails({
+          guildId,
+          channelId: connection.joinConfig.channelId,
+          speakingStarted,
+          ssrcMapped,
+          transcriptLength: transcript.length,
+          hasOpenClawSessionId: Boolean(session.openClawSessionId),
+          sessionKey: session.sessionKey,
+        }));
         if (!transcript.trim()) {
           throw new Error('Audio arrived, but Whisper could not recognize any speech. Try speaking more clearly or a little louder.');
         }
@@ -423,8 +496,8 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
           sessionId: session.openClawSessionId,
         });
         log('OpenClaw turn finished', {
-          sessionKey: openClawResult.sessionKey,
-          sessionId: openClawResult.sessionId,
+          sessionKeyPreview: redactSessionKey(openClawResult.sessionKey),
+          hasOpenClawSessionId: Boolean(openClawResult.sessionId),
         });
 
         await synthesizeWithSay(openClawResult.reply, ttsPath);
@@ -517,7 +590,7 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const session = clearVoiceSession(interaction.guild.id);
+  const session = getVoiceSession(interaction.guild.id);
   connection.destroy();
 
   if (!session) {
@@ -531,6 +604,7 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
 
   try {
     const deleted = await deleteOpenClawSession(session.sessionKey);
+    clearVoiceSession(interaction.guild.id);
     const embed = new EmbedBuilder()
       .setTitle('Disconnected')
       .setColor(deleted.deleted ? 0x5865f2 : 0xfee75c)
@@ -550,11 +624,18 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
       .setTitle('Disconnected with cleanup warning')
       .setColor(0xed4245)
       .setDescription(`Left the voice channel, but OpenClaw session cleanup failed: ${formatPipelineError(error)}`)
-      .addFields({
-        name: 'Session key',
-        value: summarizeSessionKey(session.sessionKey),
-        inline: false,
-      });
+      .addFields(
+        {
+          name: 'Session key',
+          value: summarizeSessionKey(session.sessionKey),
+          inline: false,
+        },
+        {
+          name: 'Retry path',
+          value: 'The local session reference was kept. Re-run `/leave` or `/join` to retry cleanup safely.',
+          inline: false,
+        },
+      );
     await interaction.editReply({ embeds: [embed] });
   }
 }

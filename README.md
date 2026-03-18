@@ -25,6 +25,7 @@ It is designed for personal or small trusted setups, not as a polished hosted se
 - `/listen` captures one spoken turn from the invoking user, sends it to OpenClaw, and plays one spoken reply
 - `/leave` disconnects the bot from voice
 - `/info` shows dependency health and current in-memory session status
+- `/help` opens an interactive help menu with buttons for commands, status, and doctor output
 - `/ping` provides a simple health check
 
 ## Scope
@@ -75,8 +76,16 @@ git clone https://github.com/jx-grxf/OpenClaw-Discord-Voice.git
 cd OpenClaw-Discord-Voice
 npm install
 cp .env.example .env
+npm run doctor:bridge
 npm run dev
 ```
+
+Before the bot can actually start, you still need:
+
+- local `openclaw` installed and working
+- `ffmpeg`, `whisper-cli`, and macOS `say`
+- a Whisper model at `models/ggml-base.bin`
+- valid `DISCORD_TOKEN` and `DISCORD_GUILD_ID` values in `.env`
 
 More details:
 

@@ -73,7 +73,8 @@ async function gracefulShutdown(signal: NodeJS.Signals | 'UNCAUGHT_EXCEPTION' | 
     console.error('Shutdown cleanup failed', error);
   }
 
-  setTimeout(() => process.exit(0), 50).unref();
+  const exitCode = signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1;
+  setTimeout(() => process.exit(exitCode), 50).unref();
 }
 
 process.on('SIGINT', () => {

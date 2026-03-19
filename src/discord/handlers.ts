@@ -56,6 +56,19 @@ function formatPipelineError(error: unknown): string {
     const message = error.message.trim();
     const firstLine = message.split('\n').find((line) => line.trim())?.trim() ?? message;
 
+    if (message.includes('missing scope: operator.write')) {
+      return 'OpenClaw denied live verbose streaming for this session because the local gateway token does not have write scope.';
+    }
+
+    return firstLine;
+  }
+  return 'Unknown voice bridge error.';
+}
+
+function formatCleanupError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    const message = error.message.trim();
+
     if (message.includes('ETIMEDOUT') || message.includes('timed out')) {
       return 'OpenClaw cleanup timed out before it could confirm the session deletion.';
     }
@@ -68,9 +81,17 @@ function formatPipelineError(error: unknown): string {
       return 'OpenClaw denied the cleanup request because this local gateway token does not have the needed admin scope.';
     }
 
-    return firstLine;
+    const firstLine = message.split('\n').find((line) => line.trim())?.trim();
+    if (firstLine) return firstLine;
   }
-  return 'Unknown voice bridge error.';
+
+  return 'OpenClaw cleanup failed for an unknown reason.';
+}
+
+function fitEmbedFieldValue(value: string, maxLength = 1024): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '—';
+  return truncate(trimmed, maxLength);
 }
 
 function summarizeSessionKey(sessionKey: string): string {
@@ -258,6 +279,17 @@ async function sendVerboseEventToThread(guild: Guild, threadId: string, event: O
   }
 
   await thread.send({ content });
+}
+
+async function sendVerboseNoticeToThread(guild: Guild, threadId: string, message: string): Promise<void> {
+  const thread = await resolveVerboseThread(guild, threadId);
+  if (!thread) return;
+
+  if (thread.archived && !thread.locked) {
+    await thread.setArchived(false).catch(() => {});
+  }
+
+  await thread.send({ content: trimVerboseMessage(message) });
 }
 
 function getVerboseHostChannel(channel: ChatInputCommandInteraction['channel'] | ButtonInteraction['channel']): TextChannel | null {
@@ -889,8 +921,10 @@ async function runListenTurn(context: ListenExecutionContext) {
           throw new Error('Audio arrived, but Whisper could not recognize any speech. Try speaking more clearly or a little louder.');
         }
 
-        const openClawResult = session.verboseEnabled && session.verboseThreadId
-          ? await askOpenClawWithVerbose(
+        let openClawResult;
+        if (session.verboseEnabled && session.verboseThreadId) {
+          try {
+            openClawResult = await askOpenClawWithVerbose(
               transcript,
               {
                 sessionKey: session.sessionKey,
@@ -901,11 +935,28 @@ async function runListenTurn(context: ListenExecutionContext) {
                   await sendVerboseEventToThread(guild, session.verboseThreadId!, event);
                 },
               },
-            )
-          : await askOpenClaw(transcript, {
+            );
+          } catch (error) {
+            console.warn(logPrefix, 'Verbose streaming failed, falling back to normal agent call', {
+              error: formatPipelineError(error),
+            });
+            setVoiceSessionVerbose(guildId, false);
+            await sendVerboseNoticeToThread(
+              guild,
+              session.verboseThreadId,
+              `Verbose mode was turned off for this session because live streaming failed:\n> ${formatPipelineError(error)}\n\nThe voice request is continuing in normal mode.`,
+            ).catch(() => {});
+            openClawResult = await askOpenClaw(transcript, {
               sessionKey: session.sessionKey,
               sessionId: session.openClawSessionId,
             });
+          }
+        } else {
+          openClawResult = await askOpenClaw(transcript, {
+            sessionKey: session.sessionKey,
+            sessionId: session.openClawSessionId,
+          });
+        }
         log('OpenClaw turn finished', {
           sessionKeyPreview: redactSessionKey(openClawResult.sessionKey),
           hasOpenClawSessionId: Boolean(openClawResult.sessionId),
@@ -935,12 +986,12 @@ async function runListenTurn(context: ListenExecutionContext) {
           .addFields(
             {
               name: 'You said',
-              value: transcript,
+              value: fitEmbedFieldValue(transcript),
               inline: false,
             },
             {
               name: 'OpenClaw replied',
-              value: openClawResult.reply,
+              value: fitEmbedFieldValue(openClawResult.reply),
               inline: false,
             },
             {
@@ -1277,7 +1328,7 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
     const embed = new EmbedBuilder()
       .setTitle('Disconnected with cleanup warning')
       .setColor(0xed4245)
-      .setDescription(`Left the voice channel, but OpenClaw session cleanup failed: ${formatPipelineError(error)}`)
+      .setDescription(`Left the voice channel, but OpenClaw session cleanup failed: ${formatCleanupError(error)}`)
       .addFields(
         {
           name: 'Session key',

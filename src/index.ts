@@ -38,7 +38,6 @@ const commands = [
   new SlashCommandBuilder().setName('info').setDescription('Show bridge status and dependency health'),
   new SlashCommandBuilder().setName('help').setDescription('Open the interactive help menu'),
   new SlashCommandBuilder().setName('voice-verbose').setDescription('Configure verbose tool/thread streaming for the active voice session'),
-  new SlashCommandBuilder().setName('verbose').setDescription('Alias for /voice-verbose'),
 ].map((c) => c.toJSON());
 
 async function registerCommands(applicationId: string) {
@@ -152,7 +151,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      if (interaction.commandName === 'voice-verbose' || interaction.commandName === 'verbose') {
+      if (interaction.commandName === 'voice-verbose') {
         await handleVoiceVerbose(interaction);
         return;
       }

@@ -1100,6 +1100,10 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
 }
 
 export async function handleVoiceVerbose(interaction: ChatInputCommandInteraction) {
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  }
+
   const guildId = interaction.guildId;
   if (!guildId || !interaction.guild) {
     await interaction.editReply({ content: 'This command only works inside a server.' });

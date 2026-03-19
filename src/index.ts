@@ -152,6 +152,11 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      if (interaction.commandName === 'voice-verbose' || interaction.commandName === 'verbose') {
+        await handleVoiceVerbose(interaction);
+        return;
+      }
+
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       if (interaction.commandName === 'leave') {
@@ -166,11 +171,6 @@ client.on('interactionCreate', async (interaction) => {
 
       if (interaction.commandName === 'info') {
         await handleInfo(interaction);
-        return;
-      }
-
-      if (interaction.commandName === 'voice-verbose' || interaction.commandName === 'verbose') {
-        await handleVoiceVerbose(interaction);
         return;
       }
 

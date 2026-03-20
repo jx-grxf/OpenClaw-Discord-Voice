@@ -104,6 +104,58 @@ test('extractReplyFromChatHistory prefers final assistant answer over commentary
   assert.equal(reply, 'Hier ist die finale Antwort.');
 });
 
+test('extractReplyFromChatHistory joins multi-block final answers from the same assistant message', () => {
+  const reply = extractReplyFromChatHistory([
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Teil eins der finalen Antwort.',
+          textSignature: '{"v":1,"phase":"final_answer"}',
+        },
+        {
+          type: 'text',
+          text: 'Teil zwei der finalen Antwort.',
+          textSignature: '{"v":1,"phase":"final_answer"}',
+        },
+      ],
+      timestamp: 1,
+    },
+  ]);
+
+  assert.equal(reply, 'Teil eins der finalen Antwort.\n\nTeil zwei der finalen Antwort.');
+});
+
+test('extractReplyFromChatHistory falls back to the latest commentary when no final answer exists yet', () => {
+  const reply = extractReplyFromChatHistory([
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Ich schaue erst noch nach.',
+          textSignature: '{"v":1,"phase":"commentary"}',
+        },
+      ],
+      timestamp: 1,
+    },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Noch ein Zwischenstand.',
+          textSignature: '{"v":1,"phase":"commentary"}',
+        },
+      ],
+      timestamp: 2,
+    },
+  ]);
+
+  assert.equal(reply, 'Noch ein Zwischenstand.');
+});
+
 test('extractOpenClawReply returns raw text when input is not json', () => {
   assert.equal(extractOpenClawReply('Direct reply'), 'Direct reply');
 });

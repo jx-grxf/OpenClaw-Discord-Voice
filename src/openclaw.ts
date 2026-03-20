@@ -197,6 +197,18 @@ function extractChatMessageText(message: unknown): string | null {
   return text || null;
 }
 
+function extractHistoryMessageText(message: OpenClawChatHistoryMessage): string | null {
+  if (!Array.isArray(message.content)) return null;
+
+  const text = message.content
+    .flatMap((block) => (block?.type === 'text' && typeof block.text === 'string' ? [block.text.trim()] : []))
+    .filter((part) => part.length > 0)
+    .join('\n\n')
+    .trim();
+
+  return text || null;
+}
+
 function parseAssistantHistoryPhase(block: Record<string, unknown>): string | null {
   const raw = typeof block.textSignature === 'string' ? block.textSignature.trim() : '';
   if (!raw) return null;
@@ -215,6 +227,8 @@ export function extractReplyFromChatHistory(messages: OpenClawChatHistoryMessage
   for (const message of ordered) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
 
+    const finalParts: string[] = [];
+    const commentaryParts: string[] = [];
     for (const block of message.content) {
       if (block?.type !== 'text' || typeof block.text !== 'string') continue;
       const text = block.text.trim();
@@ -222,14 +236,70 @@ export function extractReplyFromChatHistory(messages: OpenClawChatHistoryMessage
 
       const phase = parseAssistantHistoryPhase(block);
       if (phase === 'final_answer') {
-        lastAssistantText = text;
-      } else if (!lastAssistantText) {
-        lastAssistantText = text;
+        finalParts.push(text);
+      } else {
+        commentaryParts.push(text);
       }
+    }
+
+    if (finalParts.length > 0) {
+      lastAssistantText = finalParts.join('\n\n').trim();
+    } else if (commentaryParts.length > 0) {
+      lastAssistantText = commentaryParts.join('\n\n').trim();
     }
   }
 
   return lastAssistantText;
+}
+
+function findReplyAfterPrompt(
+  messages: OpenClawChatHistoryMessage[],
+  transcript: string,
+  startedAt: number,
+): string | null {
+  const ordered = [...messages].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+  const normalizedTranscript = transcript.trim();
+  const minTimestamp = startedAt - 2_000;
+
+  let promptIndex = -1;
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const message = ordered[index];
+    if (message.role !== 'user') continue;
+    const text = extractHistoryMessageText(message);
+    if (!text) continue;
+    if ((message.timestamp ?? 0) < minTimestamp) continue;
+    if (text === normalizedTranscript) {
+      promptIndex = index;
+      break;
+    }
+  }
+
+  const relevant = promptIndex >= 0
+    ? ordered.slice(promptIndex + 1)
+    : ordered.filter((message) => (message.timestamp ?? 0) >= minTimestamp);
+
+  return extractReplyFromChatHistory(relevant);
+}
+
+async function recoverReplyFromChatHistory(
+  sessionKey: string,
+  transcript: string,
+  startedAt: number,
+  options: { attempts?: number; delayMs?: number } = {},
+): Promise<string | null> {
+  const attempts = Math.max(1, options.attempts ?? 6);
+  const delayMs = Math.max(250, options.delayMs ?? 1_500);
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const historyMessages = await getOpenClawChatHistory(sessionKey, { limit: 80, timeoutMs: 20_000 });
+    const reply = findReplyAfterPrompt(historyMessages, transcript, startedAt);
+    if (reply) return reply;
+    if (attempt < attempts) {
+      await sleep(delayMs);
+    }
+  }
+
+  return null;
 }
 
 export function extractOpenClawReply(raw: string): string | null {
@@ -495,17 +565,36 @@ export async function askOpenClaw(transcript: string, session: OpenClawSessionRe
     };
   }
 
-  const raw = await runOpenClawGatewayCallWithRetry('agent', buildOpenClawAgentParams(message, session), {
-    expectFinal: true,
-    timeoutMs: 600_000,
-    attempts: 5,
-  });
+  const startedAt = Date.now();
+  let raw: string;
+  try {
+    raw = await runOpenClawGatewayCallWithRetry('agent', buildOpenClawAgentParams(message, session), {
+      expectFinal: true,
+      timeoutMs: 600_000,
+      attempts: 5,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (isGatewayConnectFlake(detail)) {
+      const recoveredReply = await recoverReplyFromChatHistory(session.sessionKey, message, startedAt);
+      if (recoveredReply) {
+        return {
+          reply: recoveredReply,
+          sessionKey: session.sessionKey,
+          sessionId: session.sessionId ?? null,
+        };
+      }
+    }
+    throw error;
+  }
 
   const reply = extractOpenClawReply(raw);
   let finalReply = reply;
   if (!finalReply) {
-    const historyMessages = await getOpenClawChatHistory(session.sessionKey, { limit: 50, timeoutMs: 20_000 });
-    finalReply = extractReplyFromChatHistory(historyMessages);
+    finalReply = await recoverReplyFromChatHistory(session.sessionKey, message, startedAt, {
+      attempts: 4,
+      delayMs: 1_000,
+    });
   }
 
   if (!finalReply) {

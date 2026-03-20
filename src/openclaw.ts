@@ -53,12 +53,21 @@ type OpenClawGatewayResponse = {
     sessionId?: string;
     sessionKey?: string;
   };
+  messages?: OpenClawChatHistoryMessage[];
 };
 
 export type OpenClawTurnResult = {
   reply: string;
   sessionKey: string;
   sessionId: string | null;
+};
+
+export type OpenClawChatHistoryMessage = {
+  role?: string;
+  content?: Array<Record<string, unknown>>;
+  toolCallId?: string;
+  toolName?: string;
+  timestamp?: number;
 };
 
 export type OpenClawVerboseEvent = {
@@ -461,6 +470,26 @@ export async function askOpenClaw(transcript: string, session: OpenClawSessionRe
     sessionKey: extractOpenClawSessionKey(raw) ?? session.sessionKey,
     sessionId: extractOpenClawSessionId(raw) ?? session.sessionId ?? null,
   };
+}
+
+export async function getOpenClawChatHistory(
+  sessionKey: string,
+  options: { limit?: number; timeoutMs?: number } = {},
+): Promise<OpenClawChatHistoryMessage[]> {
+  const raw = await runOpenClawGatewayCallWithRetry(
+    'chat.history',
+    {
+      sessionKey: sessionKey.trim(),
+      limit: Math.max(1, options.limit ?? 200),
+    },
+    {
+      timeoutMs: options.timeoutMs ?? 30_000,
+      attempts: 2,
+    },
+  );
+
+  const data = parseGatewayResponse(raw);
+  return Array.isArray(data?.messages) ? data.messages : [];
 }
 
 function resolveGatewayUrl(): string {

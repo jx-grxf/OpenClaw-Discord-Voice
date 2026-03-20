@@ -26,10 +26,11 @@ import {
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
 import {
   askOpenClaw,
-  askOpenClawWithVerbose,
   createOpenClawSession,
   deleteOpenClawSession,
   deleteOpenClawSessionWithRetry,
+  getOpenClawChatHistory,
+  type OpenClawChatHistoryMessage,
   type OpenClawVerboseEvent,
 } from '../openclaw.js';
 import {
@@ -109,6 +110,10 @@ function statusLabel(ok: boolean): string {
 function formatLatency(ms: number): string {
   if (ms < 1000) return `${ms} ms`;
   return `${(ms / 1000).toFixed(1)} s`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const VOICE_MODE_SLASH = 'voice-mode:slash';
@@ -212,6 +217,77 @@ function trimVerboseMessage(text: string, maxLength = 1_800): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+function parseTextSignaturePhase(block: Record<string, unknown>): string | null {
+  const raw = typeof block.textSignature === 'string' ? block.textSignature.trim() : '';
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { phase?: unknown };
+    return typeof parsed.phase === 'string' ? parsed.phase : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildVerboseHistoryMessages(message: OpenClawChatHistoryMessage): string[] {
+  const content = Array.isArray(message.content) ? message.content : [];
+  const results: string[] = [];
+
+  if (message.role === 'assistant') {
+    for (const block of content) {
+      const type = typeof block.type === 'string' ? block.type : '';
+
+      if (type === 'text') {
+        const text = typeof block.text === 'string' ? block.text.trim() : '';
+        const phase = parseTextSignaturePhase(block);
+        if (!text || phase === 'final_answer') continue;
+        results.push(trimVerboseMessage(`**Assistant note**\n${text}`));
+        continue;
+      }
+
+      if (type === 'toolCall') {
+        const toolName = typeof block.name === 'string' && block.name.trim() ? block.name.trim() : 'tool';
+        const args = buildVerboseValue(block.arguments ?? block.partialJson);
+        results.push(
+          trimVerboseMessage(
+            args
+              ? `**Tool call:** \`${toolName}\`\n\`\`\`json\n${args}\n\`\`\``
+              : `**Tool call:** \`${toolName}\``,
+          ),
+        );
+      }
+    }
+  }
+
+  if (message.role === 'toolResult') {
+    const toolName = message.toolName?.trim() || 'tool';
+    const text = content
+      .flatMap((block) => (block?.type === 'text' && typeof block.text === 'string' ? [block.text.trim()] : []))
+      .filter((entry) => entry.length > 0)
+      .join('\n\n')
+      .trim();
+
+    results.push(
+      trimVerboseMessage(
+        text
+          ? `**Tool output:** \`${toolName}\`\n\`\`\`\n${text}\n\`\`\``
+          : `**Tool output:** \`${toolName}\``,
+      ),
+    );
+  }
+
+  return results.filter((entry) => entry.trim().length > 0);
+}
+
+function buildVerboseHistoryMessageKey(message: OpenClawChatHistoryMessage): string {
+  return JSON.stringify({
+    role: message.role ?? '',
+    toolCallId: message.toolCallId ?? '',
+    toolName: message.toolName ?? '',
+    timestamp: message.timestamp ?? null,
+    content: message.content ?? [],
+  });
+}
+
 function formatVerboseEventMessage(event: OpenClawVerboseEvent): string | null {
   const data = event.data ?? {};
   const phase = typeof data.phase === 'string' ? data.phase : '';
@@ -290,6 +366,25 @@ async function sendVerboseNoticeToThread(guild: Guild, threadId: string, message
   }
 
   await thread.send({ content: trimVerboseMessage(message) });
+}
+
+async function mirrorVerboseHistoryToThread(
+  guild: Guild,
+  threadId: string,
+  sessionKey: string,
+  state: { seen: Set<string> },
+): Promise<void> {
+  const messages = await getOpenClawChatHistory(sessionKey, { limit: 200, timeoutMs: 15_000 });
+
+  for (const message of messages) {
+    const key = buildVerboseHistoryMessageKey(message);
+    if (state.seen.has(key)) continue;
+    state.seen.add(key);
+
+    for (const content of buildVerboseHistoryMessages(message)) {
+      await sendVerboseNoticeToThread(guild, threadId, content);
+    }
+  }
 }
 
 function getVerboseHostChannel(channel: ChatInputCommandInteraction['channel'] | ButtonInteraction['channel']): TextChannel | null {
@@ -923,33 +1018,39 @@ async function runListenTurn(context: ListenExecutionContext) {
 
         let openClawResult;
         if (session.verboseEnabled && session.verboseThreadId) {
+          const historyState = { seen: new Set<string>() };
           try {
-            openClawResult = await askOpenClawWithVerbose(
-              transcript,
-              {
-                sessionKey: session.sessionKey,
-                sessionId: session.openClawSessionId,
-              },
-              {
-                onVerboseEvent: async (event) => {
-                  await sendVerboseEventToThread(guild, session.verboseThreadId!, event);
-                },
-              },
-            );
+            await mirrorVerboseHistoryToThread(guild, session.verboseThreadId, session.sessionKey, historyState);
           } catch (error) {
-            console.warn(logPrefix, 'Verbose streaming failed, falling back to normal agent call', {
+            console.warn(logPrefix, 'Initial verbose history sync failed', {
               error: formatPipelineError(error),
             });
-            setVoiceSessionVerbose(guildId, false);
-            await sendVerboseNoticeToThread(
-              guild,
-              session.verboseThreadId,
-              `Verbose mode was turned off for this session because live streaming failed:\n> ${formatPipelineError(error)}\n\nThe voice request is continuing in normal mode.`,
-            ).catch(() => {});
+          }
+
+          let stopVerbosePolling = false;
+          const verbosePolling = (async () => {
+            while (!stopVerbosePolling) {
+              await sleep(1200);
+              if (stopVerbosePolling) break;
+              try {
+                await mirrorVerboseHistoryToThread(guild, session.verboseThreadId!, session.sessionKey, historyState);
+              } catch (error) {
+                console.warn(logPrefix, 'Verbose history poll failed', {
+                  error: formatPipelineError(error),
+                });
+              }
+            }
+          })();
+
+          try {
             openClawResult = await askOpenClaw(transcript, {
               sessionKey: session.sessionKey,
               sessionId: session.openClawSessionId,
             });
+          } finally {
+            stopVerbosePolling = true;
+            await verbosePolling.catch(() => {});
+            await mirrorVerboseHistoryToThread(guild, session.verboseThreadId, session.sessionKey, historyState).catch(() => {});
           }
         } else {
           openClawResult = await askOpenClaw(transcript, {

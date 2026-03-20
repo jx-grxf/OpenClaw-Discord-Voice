@@ -1,8 +1,20 @@
 import dotenv from 'dotenv';
+import fs from 'node:fs';
+import path from 'node:path';
 import { getVoiceConnections } from '@discordjs/voice';
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
-import { handleInfo, handleJoin, handleLeave, handleListen } from './discord/handlers.js';
+import {
+  handleDebugText,
+  handleInfo,
+  handleJoin,
+  handleJoinModeButton,
+  handleLeave,
+  handleListen,
+  handleVoiceTtsButton,
+  handleVoiceVerbose,
+  handleVoiceVerboseButton,
+} from './discord/handlers.js';
 import { handleHelpButton, handleHelpCommand } from './discord/help.js';
 import { deleteOpenClawSessionWithRetry } from './openclaw.js';
 import { clearAllVoiceState, listVoiceSessions } from './state.js';
@@ -21,6 +33,8 @@ function requireEnv(name: string): string {
 const DISCORD_TOKEN = requireEnv('DISCORD_TOKEN');
 const DISCORD_GUILD_ID = requireEnv('DISCORD_GUILD_ID');
 assertStartupReadiness(process.env);
+const LOCK_DIR = path.resolve(process.cwd(), 'tmp');
+const LOCK_FILE = path.join(LOCK_DIR, 'bot.lock');
 
 const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('Check if bot is alive'),
@@ -29,6 +43,26 @@ const commands = [
   new SlashCommandBuilder().setName('listen').setDescription('Listen, transcribe, and reply in voice'),
   new SlashCommandBuilder().setName('info').setDescription('Show bridge status and dependency health'),
   new SlashCommandBuilder().setName('help').setDescription('Open the interactive help menu'),
+  new SlashCommandBuilder().setName('voice-verbose').setDescription('Configure verbose tool/thread streaming for the active voice session'),
+  new SlashCommandBuilder()
+    .setName('debugtext')
+    .setDescription('Send text directly to the active OpenClaw voice session')
+    .addStringOption((option) =>
+      option
+        .setName('text')
+        .setDescription('The text you want to send instead of speaking')
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('tts')
+        .setDescription('Play the reply back in voice or keep it chat-only')
+        .setRequired(true)
+        .addChoices(
+          { name: 'on', value: 'on' },
+          { name: 'off', value: 'off' },
+        ),
+    ),
 ].map((c) => c.toJSON());
 
 async function registerCommands(applicationId: string) {
@@ -44,6 +78,51 @@ const client = new Client({
 });
 
 let shutdownStarted = false;
+let botLockHeld = false;
+
+function pidExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireBotLock() {
+  fs.mkdirSync(LOCK_DIR, { recursive: true });
+
+  if (fs.existsSync(LOCK_FILE)) {
+    try {
+      const raw = fs.readFileSync(LOCK_FILE, 'utf8').trim();
+      const existingPid = Number(raw);
+      if (Number.isFinite(existingPid) && existingPid > 0 && pidExists(existingPid)) {
+        console.error(`Another discord-voice-assistant process is already running (pid ${existingPid}). Stop it before starting a new one.`);
+        process.exit(1);
+      }
+      fs.rmSync(LOCK_FILE, { force: true });
+    } catch {
+      fs.rmSync(LOCK_FILE, { force: true });
+    }
+  }
+
+  fs.writeFileSync(LOCK_FILE, `${process.pid}\n`, { flag: 'wx' });
+  botLockHeld = true;
+}
+
+function releaseBotLock() {
+  if (!botLockHeld) return;
+  try {
+    const raw = fs.existsSync(LOCK_FILE) ? fs.readFileSync(LOCK_FILE, 'utf8').trim() : '';
+    if (!raw || Number(raw) === process.pid) {
+      fs.rmSync(LOCK_FILE, { force: true });
+    }
+  } catch {
+    fs.rmSync(LOCK_FILE, { force: true });
+  } finally {
+    botLockHeld = false;
+  }
+}
 
 function destroyAllVoiceConnections() {
   const connections = Array.from(getVoiceConnections().entries());
@@ -89,8 +168,10 @@ async function gracefulShutdown(signal: NodeJS.Signals | 'UNCAUGHT_EXCEPTION' | 
     destroyAllVoiceConnections();
     clearAllVoiceState();
     client.destroy();
+    releaseBotLock();
   } catch (error) {
     console.error('Shutdown cleanup failed', error);
+    releaseBotLock();
   }
 
   const exitCode = signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1;
@@ -114,6 +195,8 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason);
   void gracefulShutdown('UNHANDLED_REJECTION');
 });
+
+acquireBotLock();
 
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
@@ -142,6 +225,11 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      if (interaction.commandName === 'voice-verbose') {
+        await handleVoiceVerbose(interaction);
+        return;
+      }
+
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       if (interaction.commandName === 'leave') {
@@ -151,6 +239,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (interaction.commandName === 'listen') {
         await handleListen(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'debugtext') {
+        await handleDebugText(interaction);
         return;
       }
 
@@ -164,6 +257,21 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith('voice-mode:')) {
+        await handleJoinModeButton(interaction);
+        return;
+      }
+
+      if (interaction.customId.startsWith('voice-tts:')) {
+        await handleVoiceTtsButton(interaction);
+        return;
+      }
+
+      if (interaction.customId.startsWith('voice-verbose:')) {
+        await handleVoiceVerboseButton(interaction);
+        return;
+      }
+
       await handleHelpButton(interaction);
     }
 

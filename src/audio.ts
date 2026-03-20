@@ -127,6 +127,10 @@ export function getTtsOutputExtension(): string {
   return getTtsProvider() === 'elevenlabs' ? 'mp3' : 'aiff';
 }
 
+export function getTtsOutputExtensionForProvider(provider: TtsProvider): string {
+  return provider === 'elevenlabs' ? 'mp3' : 'aiff';
+}
+
 export async function synthesizeWithSay(text: string, outPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const proc = spawn('say', ['-v', getTtsVoice(), '-r', getTtsRate(), '-o', outPath, text]);
@@ -169,8 +173,8 @@ export async function synthesizeWithElevenLabs(text: string, outPath: string): P
   await fs.promises.writeFile(outPath, audioBuffer);
 }
 
-export async function synthesizeSpeech(text: string, outPath: string): Promise<void> {
-  if (getTtsProvider() === 'elevenlabs') {
+export async function synthesizeSpeech(text: string, outPath: string, provider: TtsProvider = getTtsProvider()): Promise<void> {
+  if (provider === 'elevenlabs') {
     await synthesizeWithElevenLabs(text, outPath);
     return;
   }

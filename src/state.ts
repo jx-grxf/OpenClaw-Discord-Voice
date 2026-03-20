@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { TtsProvider } from './audio.js';
 
 export type VoiceSessionState = {
   channelId: string;
@@ -8,6 +9,13 @@ export type VoiceSessionState = {
   openClawSessionId: string | null;
   initializedAt: number | null;
   lastUsedAt: number | null;
+  listenMode: 'slash' | 'auto';
+  autoListenTextChannelId: string | null;
+  botSpeaking: boolean;
+  verboseEnabled: boolean;
+  verboseThreadId: string | null;
+  verboseStartedAt: number | null;
+  ttsProvider: TtsProvider;
 };
 
 const activeSessionByGuild = new Map<string, VoiceSessionState>();
@@ -16,6 +24,10 @@ const activeJoinByGuild = new Map<string, string>();
 
 function resolveOpenClawAgentId(): string {
   return process.env.OPENCLAW_AGENT_ID?.trim() || 'main';
+}
+
+function resolveDefaultTtsProvider(): TtsProvider {
+  return process.env.TTS_PROVIDER?.trim().toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'say';
 }
 
 export function buildVoiceSessionKey(guildId: string, channelId: string): string {
@@ -36,6 +48,13 @@ export function createVoiceSession(
     openClawSessionId: sessionRef.openClawSessionId?.trim() || null,
     initializedAt: null,
     lastUsedAt: null,
+    listenMode: 'slash',
+    autoListenTextChannelId: null,
+    botSpeaking: false,
+    verboseEnabled: false,
+    verboseThreadId: null,
+    verboseStartedAt: null,
+    ttsProvider: resolveDefaultTtsProvider(),
   };
 
   activeSessionByGuild.set(guildId, session);
@@ -68,6 +87,49 @@ export function markVoiceSessionUsed(
 
 export function getVoiceSession(guildId: string): VoiceSessionState | null {
   return activeSessionByGuild.get(guildId) ?? null;
+}
+
+export function setVoiceSessionListenMode(
+  guildId: string,
+  mode: 'slash' | 'auto',
+  options: { textChannelId?: string | null } = {},
+): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.listenMode = mode;
+  session.autoListenTextChannelId = mode === 'auto' ? options.textChannelId?.trim() || session.autoListenTextChannelId : null;
+  return session;
+}
+
+export function setVoiceSessionBotSpeaking(guildId: string, speaking: boolean): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.botSpeaking = speaking;
+  return session;
+}
+
+export function setVoiceSessionVerbose(
+  guildId: string,
+  enabled: boolean,
+  options: { threadId?: string | null } = {},
+): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.verboseEnabled = enabled;
+  session.verboseThreadId = enabled ? options.threadId?.trim() || session.verboseThreadId : null;
+  session.verboseStartedAt = enabled ? Date.now() : null;
+  return session;
+}
+
+export function setVoiceSessionTtsProvider(guildId: string, provider: TtsProvider): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.ttsProvider = provider;
+  return session;
 }
 
 export function beginGuildJoin(guildId: string, discordUserId: string): { ok: boolean; activeUserId: string | null } {

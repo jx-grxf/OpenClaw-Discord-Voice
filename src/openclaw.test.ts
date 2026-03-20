@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildOpenClawAgentParams,
+  buildOpenClawSessionPatchParams,
   buildOpenClawSessionDeleteParams,
   buildOpenClawSessionResetParams,
   deleteOpenClawSession,
   extractOpenClawReply,
+  extractReplyFromChatHistory,
   extractOpenClawSessionId,
   extractOpenClawSessionKey,
 } from './openclaw.js';
@@ -21,7 +23,7 @@ test('extractOpenClawReply prefers structured outputText', () => {
   assert.equal(extractOpenClawReply(raw), 'Hello from OpenClaw');
 });
 
-test('extractOpenClawReply falls back to payload text or summary', () => {
+test('extractOpenClawReply falls back to summary when no final outputText exists', () => {
   const raw = JSON.stringify({
     result: {
       payloads: [{ text: '' }, { content: 'Reply from payload' }],
@@ -29,7 +31,129 @@ test('extractOpenClawReply falls back to payload text or summary', () => {
     },
   });
 
-  assert.equal(extractOpenClawReply(raw), 'Reply from payload');
+  assert.equal(extractOpenClawReply(raw), 'Summary reply');
+});
+
+test('extractOpenClawReply joins meaningful payload text when tools emit interim and final text', () => {
+  const raw = JSON.stringify({
+    result: {
+      payloads: [
+        { text: 'Ich schaue kurz nach.' },
+        { content: '' },
+        { content: 'Finale Antwort mit den echten Ergebnissen.' },
+      ],
+    },
+  });
+
+  assert.equal(extractOpenClawReply(raw), 'Ich schaue kurz nach.\n\nFinale Antwort mit den echten Ergebnissen.');
+});
+
+test('extractOpenClawReply still prefers summary over payload chatter when available', () => {
+  const raw = JSON.stringify({
+    result: {
+      payloads: [
+        { text: 'Ich prüfe das kurz.' },
+        { content: 'Noch ein Zwischenstand.' },
+      ],
+      meta: { summaryText: 'Zusammenfassung mit finaler Antwort.' },
+    },
+  });
+
+  assert.equal(extractOpenClawReply(raw), 'Zusammenfassung mit finaler Antwort.');
+});
+
+test('extractOpenClawReply ignores completed placeholder text and uses payloads instead', () => {
+  const raw = JSON.stringify({
+    summary: 'completed',
+    text: 'completed',
+    result: {
+      text: 'completed',
+      payloads: [{ text: 'Die echte finale Antwort.' }],
+    },
+  });
+
+  assert.equal(extractOpenClawReply(raw), 'Die echte finale Antwort.');
+});
+
+test('extractReplyFromChatHistory prefers final assistant answer over commentary', () => {
+  const reply = extractReplyFromChatHistory([
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Ich schaue kurz nach.',
+          textSignature: '{"v":1,"phase":"commentary"}',
+        },
+      ],
+      timestamp: 1,
+    },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Hier ist die finale Antwort.',
+          textSignature: '{"v":1,"phase":"final_answer"}',
+        },
+      ],
+      timestamp: 2,
+    },
+  ]);
+
+  assert.equal(reply, 'Hier ist die finale Antwort.');
+});
+
+test('extractReplyFromChatHistory joins multi-block final answers from the same assistant message', () => {
+  const reply = extractReplyFromChatHistory([
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Teil eins der finalen Antwort.',
+          textSignature: '{"v":1,"phase":"final_answer"}',
+        },
+        {
+          type: 'text',
+          text: 'Teil zwei der finalen Antwort.',
+          textSignature: '{"v":1,"phase":"final_answer"}',
+        },
+      ],
+      timestamp: 1,
+    },
+  ]);
+
+  assert.equal(reply, 'Teil eins der finalen Antwort.\n\nTeil zwei der finalen Antwort.');
+});
+
+test('extractReplyFromChatHistory falls back to the latest commentary when no final answer exists yet', () => {
+  const reply = extractReplyFromChatHistory([
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Ich schaue erst noch nach.',
+          textSignature: '{"v":1,"phase":"commentary"}',
+        },
+      ],
+      timestamp: 1,
+    },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Noch ein Zwischenstand.',
+          textSignature: '{"v":1,"phase":"commentary"}',
+        },
+      ],
+      timestamp: 2,
+    },
+  ]);
+
+  assert.equal(reply, 'Noch ein Zwischenstand.');
 });
 
 test('extractOpenClawReply returns raw text when input is not json', () => {
@@ -78,6 +202,18 @@ test('buildOpenClawSessionDeleteParams creates a delete request with transcript 
   assert.deepEqual(params, {
     key: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
     deleteTranscript: true,
+  });
+});
+
+test('buildOpenClawSessionPatchParams creates a patch request for verbose mode', () => {
+  const params = buildOpenClawSessionPatchParams(
+    'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    { verboseLevel: 'full' },
+  );
+
+  assert.deepEqual(params, {
+    key: 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test',
+    verboseLevel: 'full',
   });
 });
 

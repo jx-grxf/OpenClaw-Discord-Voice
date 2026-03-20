@@ -17,11 +17,12 @@ import {
 import {
   convertPcmToWav,
   createRequestTempDir,
-  getTtsOutputExtension,
+  getTtsOutputExtensionForProvider,
   playAudioFile,
   removeRequestTempDir,
   synthesizeSpeech,
   transcribeWav,
+  type TtsProvider,
 } from '../audio.js';
 import { collectBridgeHealth, summarizeHealthIssues } from '../diagnostics.js';
 import {
@@ -48,6 +49,7 @@ import {
   setVoiceSessionVerbose,
   setVoiceSessionBotSpeaking,
   setVoiceSessionListenMode,
+  setVoiceSessionTtsProvider,
 } from '../state.js';
 import { formatAge, truncate } from '../utils.js';
 import { getOrCreateConnectionFromMember } from '../voice.js';
@@ -120,6 +122,8 @@ const VOICE_MODE_SLASH = 'voice-mode:slash';
 const VOICE_MODE_AUTO = 'voice-mode:auto';
 const VOICE_VERBOSE_ENABLE = 'voice-verbose:enable';
 const VOICE_VERBOSE_DISABLE = 'voice-verbose:disable';
+const VOICE_TTS_SAY = 'voice-tts:say';
+const VOICE_TTS_ELEVENLABS = 'voice-tts:elevenlabs';
 
 type ListenExecutionContext = {
   guildId: string;
@@ -144,6 +148,21 @@ function buildVoiceVerboseButtons(active: boolean) {
         .setCustomId(VOICE_VERBOSE_DISABLE)
         .setLabel('No')
         .setStyle(active ? ButtonStyle.Danger : ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+function buildVoiceTtsButtons(activeProvider: TtsProvider) {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(VOICE_TTS_SAY)
+        .setLabel('Say')
+        .setStyle(activeProvider === 'say' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(VOICE_TTS_ELEVENLABS)
+        .setLabel('ElevenLabs')
+        .setStyle(activeProvider === 'elevenlabs' ? ButtonStyle.Primary : ButtonStyle.Secondary),
     ),
   ];
 }
@@ -448,6 +467,13 @@ function buildJoinModeButtons(activeMode: 'slash' | 'auto') {
   ];
 }
 
+function buildJoinControls(session: NonNullable<ReturnType<typeof getVoiceSession>>) {
+  return [
+    ...buildJoinModeButtons(session.listenMode),
+    ...buildVoiceTtsButtons(session.ttsProvider),
+  ];
+}
+
 function buildJoinEmbed(session: NonNullable<ReturnType<typeof getVoiceSession>>, options: {
   channelId: string | null;
   created: boolean;
@@ -477,6 +503,11 @@ function buildJoinEmbed(session: NonNullable<ReturnType<typeof getVoiceSession>>
         value: session.verboseEnabled
           ? session.verboseThreadId ? `On in <#${session.verboseThreadId}>` : 'On'
           : 'Off',
+        inline: true,
+      },
+      {
+        name: 'TTS',
+        value: session.ttsProvider === 'elevenlabs' ? 'ElevenLabs' : 'Say',
         inline: true,
       },
       {
@@ -701,7 +732,7 @@ export async function handleJoin(interaction: ChatInputCommandInteraction) {
 
   await interaction.editReply({
     embeds: [embed],
-    components: buildJoinModeButtons(session.listenMode),
+    components: buildJoinControls(session),
   });
 }
 
@@ -763,7 +794,7 @@ async function runListenTurn(context: ListenExecutionContext) {
     const pcmPath = path.join(requestTmpDir, 'input.pcm');
     const wavPath = path.join(requestTmpDir, 'input.wav');
     const transcriptBasePath = path.join(requestTmpDir, 'transcript');
-    const ttsPath = path.join(requestTmpDir, `reply.${getTtsOutputExtension()}`);
+    const ttsPath = path.join(requestTmpDir, `reply.${getTtsOutputExtensionForProvider(session.ttsProvider)}`);
     const out = fs.createWriteStream(pcmPath);
 
     let completed = false;
@@ -1063,7 +1094,7 @@ async function runListenTurn(context: ListenExecutionContext) {
           hasOpenClawSessionId: Boolean(openClawResult.sessionId),
         });
 
-        await synthesizeSpeech(openClawResult.reply, ttsPath);
+        await synthesizeSpeech(openClawResult.reply, ttsPath, session.ttsProvider);
         log('TTS synthesis finished', { ttsPath });
         setVoiceSessionBotSpeaking(guildId, true);
         await playAudioFile(connection, ttsPath);
@@ -1367,7 +1398,42 @@ export async function handleJoinModeButton(interaction: ButtonInteraction) {
         issues: summarizeHealthIssues(collectBridgeHealth()),
       }),
     ],
-    components: buildJoinModeButtons(updatedSession.listenMode),
+    components: buildJoinControls(updatedSession),
+  });
+}
+
+export async function handleVoiceTtsButton(interaction: ButtonInteraction) {
+  if (!interaction.customId.startsWith('voice-tts:')) return;
+
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.guild) return;
+
+  const session = getVoiceSession(guildId);
+  const connection = getVoiceConnection(guildId);
+  if (!session || !connection) {
+    await interaction.editReply({
+      content: 'The voice session is no longer active. Run `/join` again first.',
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
+
+  const nextProvider: TtsProvider = interaction.customId === VOICE_TTS_ELEVENLABS ? 'elevenlabs' : 'say';
+  const updatedSession = setVoiceSessionTtsProvider(guildId, nextProvider);
+  if (!updatedSession) return;
+
+  await interaction.editReply({
+    embeds: [
+      buildJoinEmbed(updatedSession, {
+        channelId: connection.joinConfig.channelId,
+        created: false,
+        issues: summarizeHealthIssues(collectBridgeHealth()),
+      }),
+    ],
+    components: buildJoinControls(updatedSession),
   });
 }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { TtsProvider } from './audio.js';
 
 export type VoiceSessionState = {
   channelId: string;
@@ -13,6 +14,7 @@ export type VoiceSessionState = {
   botSpeaking: boolean;
   verboseEnabled: boolean;
   verboseThreadId: string | null;
+  ttsProvider: TtsProvider;
 };
 
 const activeSessionByGuild = new Map<string, VoiceSessionState>();
@@ -21,6 +23,10 @@ const activeJoinByGuild = new Map<string, string>();
 
 function resolveOpenClawAgentId(): string {
   return process.env.OPENCLAW_AGENT_ID?.trim() || 'main';
+}
+
+function resolveDefaultTtsProvider(): TtsProvider {
+  return process.env.TTS_PROVIDER?.trim().toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'say';
 }
 
 export function buildVoiceSessionKey(guildId: string, channelId: string): string {
@@ -46,6 +52,7 @@ export function createVoiceSession(
     botSpeaking: false,
     verboseEnabled: false,
     verboseThreadId: null,
+    ttsProvider: resolveDefaultTtsProvider(),
   };
 
   activeSessionByGuild.set(guildId, session);
@@ -111,6 +118,14 @@ export function setVoiceSessionVerbose(
 
   session.verboseEnabled = enabled;
   session.verboseThreadId = enabled ? options.threadId?.trim() || session.verboseThreadId : null;
+  return session;
+}
+
+export function setVoiceSessionTtsProvider(guildId: string, provider: TtsProvider): VoiceSessionState | null {
+  const session = activeSessionByGuild.get(guildId);
+  if (!session) return null;
+
+  session.ttsProvider = provider;
   return session;
 }
 

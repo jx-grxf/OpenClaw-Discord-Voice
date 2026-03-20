@@ -14,6 +14,7 @@ import {
   markVoiceSessionUsed,
   setVoiceSessionBotSpeaking,
   setVoiceSessionListenMode,
+  setVoiceSessionTtsProvider,
   setVoiceSessionVerbose,
 } from './state.js';
 
@@ -75,6 +76,20 @@ test('voice session verbose mode can bind a verbose thread', () => {
   assert.equal(getVoiceSession('guild-verbose')?.verboseThreadId, null);
 
   clearVoiceSession('guild-verbose');
+});
+
+test('voice session tts provider can switch between say and elevenlabs', () => {
+  createVoiceSession('guild-tts', 'channel-1', 'user-1');
+
+  const updated = setVoiceSessionTtsProvider('guild-tts', 'elevenlabs');
+
+  assert(updated);
+  assert.equal(updated?.ttsProvider, 'elevenlabs');
+
+  setVoiceSessionTtsProvider('guild-tts', 'say');
+  assert.equal(getVoiceSession('guild-tts')?.ttsProvider, 'say');
+
+  clearVoiceSession('guild-tts');
 });
 
 test('markVoiceSessionUsed stores OpenClaw session details after a real turn', () => {

@@ -10,6 +10,7 @@ import {
   handleJoinModeButton,
   handleLeave,
   handleListen,
+  handleVoiceTtsButton,
   handleVoiceVerbose,
   handleVoiceVerboseButton,
 } from './discord/handlers.js';
@@ -233,6 +234,11 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('voice-mode:')) {
         await handleJoinModeButton(interaction);
+        return;
+      }
+
+      if (interaction.customId.startsWith('voice-tts:')) {
+        await handleVoiceTtsButton(interaction);
         return;
       }
 

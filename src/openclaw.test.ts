@@ -7,6 +7,7 @@ import {
   buildOpenClawSessionResetParams,
   deleteOpenClawSession,
   extractOpenClawReply,
+  extractReplyFromChatHistory,
   extractOpenClawSessionId,
   extractOpenClawSessionKey,
 } from './openclaw.js';
@@ -72,6 +73,35 @@ test('extractOpenClawReply ignores completed placeholder text and uses payloads 
   });
 
   assert.equal(extractOpenClawReply(raw), 'Die echte finale Antwort.');
+});
+
+test('extractReplyFromChatHistory prefers final assistant answer over commentary', () => {
+  const reply = extractReplyFromChatHistory([
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Ich schaue kurz nach.',
+          textSignature: '{"v":1,"phase":"commentary"}',
+        },
+      ],
+      timestamp: 1,
+    },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Hier ist die finale Antwort.',
+          textSignature: '{"v":1,"phase":"final_answer"}',
+        },
+      ],
+      timestamp: 2,
+    },
+  ]);
+
+  assert.equal(reply, 'Hier ist die finale Antwort.');
 });
 
 test('extractOpenClawReply returns raw text when input is not json', () => {

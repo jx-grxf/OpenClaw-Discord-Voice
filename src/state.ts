@@ -14,6 +14,7 @@ export type VoiceSessionState = {
   botSpeaking: boolean;
   verboseEnabled: boolean;
   verboseThreadId: string | null;
+  verboseStartedAt: number | null;
   ttsProvider: TtsProvider;
 };
 
@@ -52,6 +53,7 @@ export function createVoiceSession(
     botSpeaking: false,
     verboseEnabled: false,
     verboseThreadId: null,
+    verboseStartedAt: null,
     ttsProvider: resolveDefaultTtsProvider(),
   };
 
@@ -118,6 +120,7 @@ export function setVoiceSessionVerbose(
 
   session.verboseEnabled = enabled;
   session.verboseThreadId = enabled ? options.threadId?.trim() || session.verboseThreadId : null;
+  session.verboseStartedAt = enabled ? Date.now() : null;
   return session;
 }
 

@@ -70,10 +70,12 @@ test('voice session verbose mode can bind a verbose thread', () => {
   assert(updated);
   assert.equal(updated?.verboseEnabled, true);
   assert.equal(updated?.verboseThreadId, 'thread-1');
+  assert.equal(typeof updated?.verboseStartedAt, 'number');
 
   setVoiceSessionVerbose('guild-verbose', false);
   assert.equal(getVoiceSession('guild-verbose')?.verboseEnabled, false);
   assert.equal(getVoiceSession('guild-verbose')?.verboseThreadId, null);
+  assert.equal(getVoiceSession('guild-verbose')?.verboseStartedAt, null);
 
   clearVoiceSession('guild-verbose');
 });

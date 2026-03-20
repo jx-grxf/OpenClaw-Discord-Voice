@@ -391,17 +391,30 @@ async function mirrorVerboseHistoryToThread(
   guild: Guild,
   threadId: string,
   sessionKey: string,
-  state: { seen: Set<string> },
+  state: { seen: Set<string>; startedAt: number | null },
 ): Promise<void> {
   const messages = await getOpenClawChatHistory(sessionKey, { limit: 200, timeoutMs: 15_000 });
+  const minTimestamp = state.startedAt ? state.startedAt - 2_000 : null;
 
   for (const message of messages) {
+    if (minTimestamp && typeof message.timestamp === 'number' && message.timestamp < minTimestamp) {
+      continue;
+    }
+
     const key = buildVerboseHistoryMessageKey(message);
     if (state.seen.has(key)) continue;
     state.seen.add(key);
 
     for (const content of buildVerboseHistoryMessages(message)) {
-      await sendVerboseNoticeToThread(guild, threadId, content);
+      try {
+        await sendVerboseNoticeToThread(guild, threadId, content);
+      } catch (error) {
+        console.warn('Verbose thread message send failed', {
+          threadId,
+          sessionKeyPreview: redactSessionKey(sessionKey),
+          error: formatPipelineError(error),
+        });
+      }
     }
   }
 }
@@ -1049,7 +1062,7 @@ async function runListenTurn(context: ListenExecutionContext) {
 
         let openClawResult;
         if (session.verboseEnabled && session.verboseThreadId) {
-          const historyState = { seen: new Set<string>() };
+          const historyState = { seen: new Set<string>(), startedAt: session.verboseStartedAt };
           try {
             await mirrorVerboseHistoryToThread(guild, session.verboseThreadId, session.sessionKey, historyState);
           } catch (error) {

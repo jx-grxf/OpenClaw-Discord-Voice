@@ -197,6 +197,41 @@ function extractChatMessageText(message: unknown): string | null {
   return text || null;
 }
 
+function parseAssistantHistoryPhase(block: Record<string, unknown>): string | null {
+  const raw = typeof block.textSignature === 'string' ? block.textSignature.trim() : '';
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { phase?: unknown };
+    return typeof parsed.phase === 'string' ? parsed.phase : null;
+  } catch {
+    return null;
+  }
+}
+
+export function extractReplyFromChatHistory(messages: OpenClawChatHistoryMessage[]): string | null {
+  const ordered = [...messages].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+  let lastAssistantText: string | null = null;
+
+  for (const message of ordered) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+
+    for (const block of message.content) {
+      if (block?.type !== 'text' || typeof block.text !== 'string') continue;
+      const text = block.text.trim();
+      if (!text) continue;
+
+      const phase = parseAssistantHistoryPhase(block);
+      if (phase === 'final_answer') {
+        lastAssistantText = text;
+      } else if (!lastAssistantText) {
+        lastAssistantText = text;
+      }
+    }
+  }
+
+  return lastAssistantText;
+}
+
 export function extractOpenClawReply(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -461,12 +496,18 @@ export async function askOpenClaw(transcript: string, session: OpenClawSessionRe
   });
 
   const reply = extractOpenClawReply(raw);
-  if (!reply) {
+  let finalReply = reply;
+  if (!finalReply) {
+    const historyMessages = await getOpenClawChatHistory(session.sessionKey, { limit: 50, timeoutMs: 20_000 });
+    finalReply = extractReplyFromChatHistory(historyMessages);
+  }
+
+  if (!finalReply) {
     throw new Error('OpenClaw returned no usable reply.');
   }
 
   return {
-    reply,
+    reply: finalReply,
     sessionKey: extractOpenClawSessionKey(raw) ?? session.sessionKey,
     sessionId: extractOpenClawSessionId(raw) ?? session.sessionId ?? null,
   };
@@ -484,7 +525,7 @@ export async function getOpenClawChatHistory(
     },
     {
       timeoutMs: options.timeoutMs ?? 30_000,
-      attempts: 2,
+      attempts: 5,
     },
   );
 

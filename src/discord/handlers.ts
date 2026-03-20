@@ -1434,9 +1434,13 @@ function enableAutoListen(guildId: string, guild: NonNullable<ListenExecutionCon
         const activeSession = getVoiceSession(guildId);
         await sendAutoModeMessage(guild, activeSession?.autoListenTextChannelId ?? null, payload);
       },
-    }).finally(() => {
-      controller.triggerActive = false;
-    });
+    })
+      .catch((error) => {
+        console.error('Error during auto-listen runListenTurn:', error);
+      })
+      .finally(() => {
+        controller.triggerActive = false;
+      });
   };
 
   receiver.speaking.on('start', onSpeakingStart);

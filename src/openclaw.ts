@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { WebSocket } from 'ws';
+import WebSocket from 'ws';
 
 type OpenClawPayload = {
   text?: string | null;
@@ -476,7 +476,7 @@ export async function setOpenClawSessionVerbose(sessionKey: string, verboseLevel
   const data = await callOpenClawGatewayWs(
     'sessions.patch',
     buildOpenClawSessionPatchParams(sessionKey, { verboseLevel }),
-    { timeoutMs: 30_000 },
+    { timeoutMs: 30_000, scopes: ['operator.admin', 'operator.read', 'operator.write'] },
   );
   const payload = data as OpenClawGatewayResponse | undefined;
   if (!payload?.ok) {
@@ -492,7 +492,10 @@ export async function deleteOpenClawSession(
     const payload = await callOpenClawGatewayWs(
       'sessions.delete',
       buildOpenClawSessionDeleteParams(sessionKey),
-      { timeoutMs: options.timeoutMs ?? 30_000 },
+      {
+        timeoutMs: options.timeoutMs ?? 30_000,
+        scopes: ['operator.admin', 'operator.read', 'operator.write'],
+      },
     ) as OpenClawGatewayResponse | undefined;
 
     if (!payload?.ok) {
@@ -636,9 +639,14 @@ function resolveGatewayUrl(): string {
   return `ws://127.0.0.1:${port}`;
 }
 
-function buildGatewayConnectRequest(id: string) {
+function buildGatewayConnectRequest(
+  id: string,
+  options: { scopes?: string[]; caps?: string[] } = {},
+) {
   const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim();
+  const scopes = options.scopes ?? ['operator.read', 'operator.write'];
+  const caps = options.caps ?? [];
 
   return {
     type: 'req',
@@ -654,14 +662,17 @@ function buildGatewayConnectRequest(id: string) {
         mode: 'backend',
       },
       role: 'operator',
-      scopes: ['operator.admin', 'operator.read', 'operator.write'],
-      caps: ['tool-events'],
+      scopes,
+      caps,
       auth: token ? { token } : password ? { password } : undefined,
     },
   };
 }
 
-async function connectGatewaySocket(timeoutMs = 10_000): Promise<WebSocket> {
+async function connectGatewaySocket(
+  timeoutMs = 10_000,
+  options: { scopes?: string[]; caps?: string[] } = {},
+): Promise<WebSocket> {
   return await new Promise<WebSocket>((resolve, reject) => {
     const ws = new WebSocket(resolveGatewayUrl());
     const timer = setTimeout(() => {
@@ -678,6 +689,9 @@ async function connectGatewaySocket(timeoutMs = 10_000): Promise<WebSocket> {
 
     const fail = (error: Error) => {
       cleanup();
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
       reject(error);
     };
 
@@ -698,7 +712,7 @@ async function connectGatewaySocket(timeoutMs = 10_000): Promise<WebSocket> {
       }
 
       if (frame.type === 'event' && 'event' in frame && frame.event === 'connect.challenge') {
-        ws.send(JSON.stringify(buildGatewayConnectRequest('gw-connect')));
+        ws.send(JSON.stringify(buildGatewayConnectRequest('gw-connect', options)));
         return;
       }
 
@@ -719,11 +733,15 @@ async function connectGatewaySocket(timeoutMs = 10_000): Promise<WebSocket> {
   });
 }
 
-async function connectGatewaySocketWithRetry(timeoutMs = 10_000, attempts = 2): Promise<WebSocket> {
+async function connectGatewaySocketWithRetry(
+  timeoutMs = 10_000,
+  attempts = 2,
+  options: { scopes?: string[]; caps?: string[] } = {},
+): Promise<WebSocket> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await connectGatewaySocket(timeoutMs);
+      return await connectGatewaySocket(timeoutMs, options);
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
@@ -740,9 +758,12 @@ async function connectGatewaySocketWithRetry(timeoutMs = 10_000, attempts = 2): 
 async function callOpenClawGatewayWs(
   method: string,
   params: Record<string, unknown>,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; scopes?: string[]; caps?: string[] } = {},
 ): Promise<unknown> {
-  const ws = await connectGatewaySocketWithRetry(options.timeoutMs ?? 10_000);
+  const ws = await connectGatewaySocketWithRetry(options.timeoutMs ?? 10_000, 2, {
+    scopes: options.scopes,
+    caps: options.caps,
+  });
 
   try {
     return await new Promise<unknown>((resolve, reject) => {
@@ -829,7 +850,10 @@ export async function askOpenClawWithVerbose(
 
   const requestId = `chat-send-${randomUUID()}`;
   const runId = `discord-voice-${randomUUID()}`;
-  const ws = await connectGatewaySocketWithRetry(10_000, 2);
+  const ws = await connectGatewaySocketWithRetry(10_000, 2, {
+    scopes: ['operator.read', 'operator.write'],
+    caps: ['tool-events'],
+  });
 
   try {
     return await new Promise<OpenClawTurnResult>((resolve, reject) => {

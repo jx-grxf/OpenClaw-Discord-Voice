@@ -135,6 +135,14 @@ type ListenExecutionContext = {
   finishReply: (payload: { embed?: EmbedBuilder; content?: string }) => Promise<void>;
 };
 
+type OpenClawTurnExecutionOptions = {
+  guildId: string;
+  guild: Guild;
+  session: NonNullable<ReturnType<typeof getVoiceSession>>;
+  transcript: string;
+  logPrefix?: string;
+};
+
 const autoListenControllers = new Map<string, { dispose: () => void; triggerActive: boolean }>();
 
 function buildVoiceVerboseButtons(active: boolean) {
@@ -417,6 +425,55 @@ async function mirrorVerboseHistoryToThread(
       }
     }
   }
+}
+
+async function runOpenClawTurnWithOptionalVerbose(options: OpenClawTurnExecutionOptions) {
+  const { guildId, guild, session, transcript, logPrefix = '[turn]' } = options;
+
+  let openClawResult;
+  if (session.verboseEnabled && session.verboseThreadId) {
+    const historyState = { seen: new Set<string>(), startedAt: session.verboseStartedAt };
+    try {
+      await mirrorVerboseHistoryToThread(guild, session.verboseThreadId, session.sessionKey, historyState);
+    } catch (error) {
+      console.warn(logPrefix, 'Initial verbose history sync failed', {
+        error: formatPipelineError(error),
+      });
+    }
+
+    let stopVerbosePolling = false;
+    const verbosePolling = (async () => {
+      while (!stopVerbosePolling) {
+        await sleep(1200);
+        if (stopVerbosePolling) break;
+        try {
+          await mirrorVerboseHistoryToThread(guild, session.verboseThreadId!, session.sessionKey, historyState);
+        } catch (error) {
+          console.warn(logPrefix, 'Verbose history poll failed', {
+            error: formatPipelineError(error),
+          });
+        }
+      }
+    })();
+
+    try {
+      openClawResult = await askOpenClaw(transcript, {
+        sessionKey: session.sessionKey,
+        sessionId: session.openClawSessionId,
+      });
+    } finally {
+      stopVerbosePolling = true;
+      await verbosePolling.catch(() => {});
+      await mirrorVerboseHistoryToThread(guild, session.verboseThreadId, session.sessionKey, historyState).catch(() => {});
+    }
+  } else {
+    openClawResult = await askOpenClaw(transcript, {
+      sessionKey: session.sessionKey,
+      sessionId: session.openClawSessionId,
+    });
+  }
+
+  return openClawResult;
 }
 
 function getVerboseHostChannel(channel: ChatInputCommandInteraction['channel'] | ButtonInteraction['channel']): TextChannel | null {
@@ -1060,48 +1117,13 @@ async function runListenTurn(context: ListenExecutionContext) {
           throw new Error('Audio arrived, but Whisper could not recognize any speech. Try speaking more clearly or a little louder.');
         }
 
-        let openClawResult;
-        if (session.verboseEnabled && session.verboseThreadId) {
-          const historyState = { seen: new Set<string>(), startedAt: session.verboseStartedAt };
-          try {
-            await mirrorVerboseHistoryToThread(guild, session.verboseThreadId, session.sessionKey, historyState);
-          } catch (error) {
-            console.warn(logPrefix, 'Initial verbose history sync failed', {
-              error: formatPipelineError(error),
-            });
-          }
-
-          let stopVerbosePolling = false;
-          const verbosePolling = (async () => {
-            while (!stopVerbosePolling) {
-              await sleep(1200);
-              if (stopVerbosePolling) break;
-              try {
-                await mirrorVerboseHistoryToThread(guild, session.verboseThreadId!, session.sessionKey, historyState);
-              } catch (error) {
-                console.warn(logPrefix, 'Verbose history poll failed', {
-                  error: formatPipelineError(error),
-                });
-              }
-            }
-          })();
-
-          try {
-            openClawResult = await askOpenClaw(transcript, {
-              sessionKey: session.sessionKey,
-              sessionId: session.openClawSessionId,
-            });
-          } finally {
-            stopVerbosePolling = true;
-            await verbosePolling.catch(() => {});
-            await mirrorVerboseHistoryToThread(guild, session.verboseThreadId, session.sessionKey, historyState).catch(() => {});
-          }
-        } else {
-          openClawResult = await askOpenClaw(transcript, {
-            sessionKey: session.sessionKey,
-            sessionId: session.openClawSessionId,
-          });
-        }
+        const openClawResult = await runOpenClawTurnWithOptionalVerbose({
+          guildId,
+          guild,
+          session,
+          transcript,
+          logPrefix,
+        });
         log('OpenClaw turn finished', {
           sessionKeyPreview: redactSessionKey(openClawResult.sessionKey),
           hasOpenClawSessionId: Boolean(openClawResult.sessionId),
@@ -1242,6 +1264,109 @@ export async function handleListen(interaction: ChatInputCommandInteraction) {
       }
     },
   });
+}
+
+export async function handleDebugText(interaction: ChatInputCommandInteraction) {
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.guild) {
+    await interaction.editReply({ content: 'This command only works inside a server.' });
+    return;
+  }
+
+  const session = getVoiceSession(guildId);
+  if (!session) {
+    if (getActiveGuildJoinUser(guildId)) {
+      await interaction.editReply('The OpenClaw voice session is still being prepared. Wait a moment, then run `/debugtext` again.');
+      return;
+    }
+    await interaction.editReply('No OpenClaw voice session is active yet. Run `/join` first.');
+    return;
+  }
+
+  const transcript = interaction.options.getString('text', true).trim();
+  const ttsEnabled = interaction.options.getString('tts', true) === 'on';
+  const startedAt = Date.now();
+
+  if (!transcript) {
+    await interaction.editReply('Please provide some text for `/debugtext`.');
+    return;
+  }
+
+  try {
+    const openClawResult = await runOpenClawTurnWithOptionalVerbose({
+      guildId,
+      guild: interaction.guild,
+      session,
+      transcript,
+      logPrefix: '[debugtext]',
+    });
+
+    if (ttsEnabled) {
+      const connection = getVoiceConnection(guildId);
+      if (!connection) {
+        await interaction.editReply('TTS is set to `on`, but the bot is not connected to voice right now. Run `/join` first or use `tts: off`.');
+        return;
+      }
+
+      const tmpDir = createRequestTempDir();
+      try {
+        const ttsPath = path.join(tmpDir, `reply.${getTtsOutputExtensionForProvider(session.ttsProvider)}`);
+        await synthesizeSpeech(openClawResult.reply, ttsPath, session.ttsProvider);
+        setVoiceSessionBotSpeaking(guildId, true);
+        await playAudioFile(connection, ttsPath);
+      } finally {
+        setVoiceSessionBotSpeaking(guildId, false);
+        await removeRequestTempDir(tmpDir);
+      }
+    }
+
+    markVoiceSessionUsed(guildId, {
+      initialized: true,
+      sessionKey: openClawResult.sessionKey,
+      openClawSessionId: openClawResult.sessionId,
+    });
+
+    const replyEmbed = new EmbedBuilder()
+      .setTitle('Debug text complete')
+      .setColor(0x57f287)
+      .addFields(
+        {
+          name: 'You sent',
+          value: fitEmbedFieldValue(transcript),
+          inline: false,
+        },
+        {
+          name: 'OpenClaw replied',
+          value: fitEmbedFieldValue(openClawResult.reply),
+          inline: false,
+        },
+        {
+          name: 'TTS playback',
+          value: ttsEnabled ? `On via ${session.ttsProvider === 'elevenlabs' ? 'ElevenLabs' : 'Say'}` : 'Off',
+          inline: false,
+        },
+        {
+          name: 'Session key',
+          value: summarizeSessionKey(openClawResult.sessionKey),
+          inline: false,
+        },
+        {
+          name: 'Session id',
+          value: summarizeSessionId(openClawResult.sessionId),
+          inline: false,
+        },
+        {
+          name: 'Latency',
+          value: formatLatency(Date.now() - startedAt),
+          inline: false,
+        },
+      )
+      .setFooter({ text: 'Debug text only affects this one command call.' });
+
+    await interaction.editReply({ embeds: [replyEmbed] });
+  } catch (error) {
+    await interaction.editReply({ content: `Processing failed: ${formatPipelineError(error)}` });
+  }
 }
 
 export async function handleVoiceVerbose(interaction: ChatInputCommandInteraction) {

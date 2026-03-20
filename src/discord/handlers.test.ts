@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildListenLogDetails, getListenTimingConfig, handleJoin, redactSessionKey } from './handlers.js';
+import { buildListenLogDetails, getListenTimingConfig, handleDebugText, handleJoin, redactSessionKey } from './handlers.js';
 
 test('handlers module exports join handler', () => {
   assert.equal(typeof handleJoin, 'function');
+});
+
+test('handlers module exports debug text handler', () => {
+  assert.equal(typeof handleDebugText, 'function');
 });
 
 test('redactSessionKey keeps only a short preview for logs', () => {

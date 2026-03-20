@@ -5,6 +5,7 @@ import { getVoiceConnections } from '@discordjs/voice';
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { assertStartupReadiness } from './diagnostics.js';
 import {
+  handleDebugText,
   handleInfo,
   handleJoin,
   handleJoinModeButton,
@@ -43,6 +44,25 @@ const commands = [
   new SlashCommandBuilder().setName('info').setDescription('Show bridge status and dependency health'),
   new SlashCommandBuilder().setName('help').setDescription('Open the interactive help menu'),
   new SlashCommandBuilder().setName('voice-verbose').setDescription('Configure verbose tool/thread streaming for the active voice session'),
+  new SlashCommandBuilder()
+    .setName('debugtext')
+    .setDescription('Send text directly to the active OpenClaw voice session')
+    .addStringOption((option) =>
+      option
+        .setName('text')
+        .setDescription('The text you want to send instead of speaking')
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('tts')
+        .setDescription('Play the reply back in voice or keep it chat-only')
+        .setRequired(true)
+        .addChoices(
+          { name: 'on', value: 'on' },
+          { name: 'off', value: 'off' },
+        ),
+    ),
 ].map((c) => c.toJSON());
 
 async function registerCommands(applicationId: string) {
@@ -219,6 +239,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (interaction.commandName === 'listen') {
         await handleListen(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'debugtext') {
+        await handleDebugText(interaction);
         return;
       }
 

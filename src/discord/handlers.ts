@@ -444,7 +444,7 @@ async function runOpenClawTurnWithOptionalVerbose(options: OpenClawTurnExecution
     let stopVerbosePolling = false;
     const verbosePolling = (async () => {
       while (!stopVerbosePolling) {
-        await sleep(1200);
+        await sleep(2500);
         if (stopVerbosePolling) break;
         try {
           await mirrorVerboseHistoryToThread(guild, session.verboseThreadId!, session.sessionKey, historyState);

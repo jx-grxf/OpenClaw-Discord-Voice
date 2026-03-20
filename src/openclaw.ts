@@ -288,7 +288,12 @@ function formatCliError(stderr: string, code: number | null): string {
 }
 
 function isGatewayConnectFlake(message: string): boolean {
-  return message.includes('gateway connect failed') || message.includes('gateway closed (1000)');
+  return (
+    message.includes('gateway connect failed')
+    || message.includes('gateway closed (1000)')
+    || message.includes('gateway closed (1000 normal closure)')
+    || message.includes('normal closure')
+  );
 }
 
 function runOpenClawGatewayCall(
@@ -328,7 +333,7 @@ async function runOpenClawGatewayCallWithRetry(
   params: Record<string, unknown>,
   options: { expectFinal?: boolean; timeoutMs?: number; attempts?: number } = {},
 ): Promise<string> {
-  const attempts = Math.max(1, options.attempts ?? 2);
+  const attempts = Math.max(1, options.attempts ?? 4);
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -340,7 +345,7 @@ async function runOpenClawGatewayCallWithRetry(
       if (attempt >= attempts || !isGatewayConnectFlake(message)) {
         throw error;
       }
-      await sleep(300 * attempt);
+      await sleep(600 * attempt);
     }
   }
 
@@ -384,6 +389,7 @@ export function buildOpenClawSessionPatchParams(
 export async function createOpenClawSession(sessionKey: string): Promise<OpenClawBootstrapResult> {
   const raw = await runOpenClawGatewayCallWithRetry('sessions.reset', buildOpenClawSessionResetParams(sessionKey), {
     timeoutMs: 30_000,
+    attempts: 5,
   });
   const data = parseGatewayResponse(raw);
   if (!data?.ok) {
@@ -492,7 +498,7 @@ export async function askOpenClaw(transcript: string, session: OpenClawSessionRe
   const raw = await runOpenClawGatewayCallWithRetry('agent', buildOpenClawAgentParams(message, session), {
     expectFinal: true,
     timeoutMs: 600_000,
-    attempts: 2,
+    attempts: 5,
   });
 
   const reply = extractOpenClawReply(raw);

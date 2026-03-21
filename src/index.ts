@@ -97,7 +97,7 @@ function acquireBotLock() {
       const raw = fs.readFileSync(LOCK_FILE, 'utf8').trim();
       const existingPid = Number(raw);
       if (Number.isFinite(existingPid) && existingPid > 0 && pidExists(existingPid)) {
-        console.error(`Another discord-voice-assistant process is already running (pid ${existingPid}). Stop it before starting a new one.`);
+        console.error(`Another OpenClaw-Discord-Voice process is already running (pid ${existingPid}). Stop it before starting a new one.`);
         process.exit(1);
       }
       fs.rmSync(LOCK_FILE, { force: true });

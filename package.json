@@ -1,5 +1,5 @@
 {
-  "name": "discord-voice-assistant",
+  "name": "OpenClaw-Discord-Voice",
   "version": "1.0.0",
   "description": "Discord voice bridge for OpenClaw with local Whisper STT and macOS TTS",
   "main": "dist/index.js",

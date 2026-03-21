@@ -51,8 +51,8 @@ async function main() {
     },
   ];
 
-  console.log('OpenClaw Discord Voice Bridge Doctor');
-  console.log('===================================');
+  console.log('OpenClaw-Discord-Voice Doctor');
+  console.log('==============================');
   printSection('Environment', envRows);
   printSection('Binaries', binaryRows);
   printSection('Assets', assetRows);

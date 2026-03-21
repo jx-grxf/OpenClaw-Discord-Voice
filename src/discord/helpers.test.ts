@@ -89,4 +89,5 @@ test('formatSessionStatus reports active session details', () => {
   assert.match(status, /OpenClaw session id:/);
   assert.match(status, /Created by Discord user/);
   assert.match(status, /Last used:/);
+  assert.doesNotMatch(status, /agent:main:discord:voice:guild:1:channel:1:join:abc/);
 });

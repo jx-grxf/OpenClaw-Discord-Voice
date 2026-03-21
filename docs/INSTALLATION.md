@@ -65,7 +65,7 @@ Recommended Discord permissions:
 
 Optional:
 
-- `TTS_PROVIDER` to choose `piper`, `say`, or `elevenlabs`. Default: `piper`
+- `TTS_PROVIDER` to choose `piper`, `say`, or `elevenlabs`. `.env.example` starts with `piper`; runtime fallback is `say` if unset.
 - `TTS_VOICE` to choose the macOS `say` voice. Default: `Flo`
 - `TTS_RATE` to set the macOS `say` speaking rate. Default: `220`
 - `PIPER_BINARY_PATH` optional, default `tools/piper-venv/bin/python`

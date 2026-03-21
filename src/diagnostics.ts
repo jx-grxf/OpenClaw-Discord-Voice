@@ -90,13 +90,14 @@ export function collectBridgeHealth(env: NodeJS.ProcessEnv = process.env): Bridg
     ok: fs.existsSync(modelPath),
     detail: fs.existsSync(modelPath) ? modelPath : `missing: ${modelPath}`,
   };
+  const piperModelPath = getPiperModelPath(env);
   const piperModel = provider === 'piper'
     ? {
         name: 'Piper model',
-        ok: fs.existsSync(getPiperModelPath(env)),
-        detail: fs.existsSync(getPiperModelPath(env))
-          ? getPiperModelPath(env)
-          : `missing: ${getPiperModelPath(env)}`,
+        ok: fs.existsSync(piperModelPath),
+        detail: fs.existsSync(piperModelPath)
+          ? piperModelPath
+          : `missing: ${piperModelPath}`,
       }
     : null;
 

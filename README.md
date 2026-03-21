@@ -97,7 +97,7 @@ If you are starting from scratch, install and verify OpenClaw first. This bridge
 | `whisper-cli` | Yes | Local STT | Needs a compatible model file |
 | Whisper model | Yes | Speech recognition | Default is `models/ggml-base.bin` |
 | `say` | No | Built-in macOS fallback TTS | Lowest quality, but zero setup |
-| Piper runtime + model | No | Better local TTS | Recommended local default |
+| Piper runtime + model | No | Better local TTS | Recommended local option via `.env.example` |
 | ElevenLabs API | No | Cloud TTS | Higher quality, costs credits |
 | Discord bot token | Yes | Bot login | Local `.env` only |
 | Discord guild id | Yes | Guild command registration | Single-guild focused |
@@ -109,9 +109,12 @@ At startup the bot checks:
 - `openclaw`
 - `ffmpeg`
 - `whisper-cli`
-- `say`
-- `python3`
 - the configured Whisper model path
+
+Depending on `TTS_PROVIDER`, it also checks:
+
+- `say`, when `TTS_PROVIDER=say`
+- the configured Piper binary and model path, when `TTS_PROVIDER=piper`
 
 ---
 
@@ -155,7 +158,7 @@ More details:
 
 | Variable | Purpose |
 |---|---|
-| `TTS_PROVIDER` | `piper`, `say`, or `elevenlabs`, default `piper` |
+| `TTS_PROVIDER` | `piper`, `say`, or `elevenlabs`; `.env.example` starts with `piper`, code fallback is `say` |
 | `TTS_VOICE` | macOS `say` voice, default `Flo` |
 | `TTS_RATE` | macOS `say` rate, default `220` |
 | `PIPER_BINARY_PATH` | Piper runner path, default `tools/piper-venv/bin/python` |

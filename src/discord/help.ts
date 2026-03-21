@@ -60,13 +60,15 @@ function buildHomeEmbed() {
     .setFooter({ text: 'All help panels are ephemeral and only visible to you.' });
 }
 
-function buildCommandsEmbed() {
+export function buildCommandsEmbed() {
   return new EmbedBuilder()
     .setTitle('Commands')
     .setColor(0x5865f2)
     .addFields(
       { name: '/join', value: 'Join your current voice channel and prepare an OpenClaw session.' },
       { name: '/listen', value: 'Capture one spoken turn, send it to OpenClaw, and play the spoken reply.' },
+      { name: '/voice-verbose', value: 'Enable a separate Discord thread for tool calls and background execution details.' },
+      { name: '/debugtext', value: 'Send plain text directly into the active voice session for debugging.' },
       { name: '/leave', value: 'Leave voice and clean up the active OpenClaw session.' },
       { name: '/info', value: 'Show the live bridge status, session state, locks, and dependency summary.' },
       { name: '/help', value: 'Open this interactive help menu.' },

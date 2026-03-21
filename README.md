@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎙️ OpenClaw Discord Voice Bridge
+# 🎙️ OpenClaw-Discord-Voice
 
 **Experimental, self-hosted Discord voice bridge for OpenClaw**
 
@@ -15,7 +15,7 @@
 
 </div>
 
-OpenClaw Discord Voice Bridge connects a Discord voice channel to a local OpenClaw session: it captures one spoken turn, transcribes it locally, sends the transcript to OpenClaw, and plays the reply back into the channel.
+OpenClaw-Discord-Voice connects a Discord voice channel to a local OpenClaw session: it captures one spoken turn, transcribes it locally, sends the transcript to OpenClaw, and plays the reply back into the channel.
 
 It is built for self-hosted, personal, or small trusted setups, not as a polished hosted SaaS product.
 

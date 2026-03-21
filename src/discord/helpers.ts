@@ -118,7 +118,7 @@ export function buildListenLogDetails(details: {
   };
 }
 
-export function formatSessionStatus(guildId: string | null, userId: string): string {
+export function formatSessionStatus(guildId: string | null): string {
   if (!guildId) return 'No voice session has been prepared for you yet.';
   const joinUserId = getActiveGuildJoinUser(guildId);
   if (joinUserId) {

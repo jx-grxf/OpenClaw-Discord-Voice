@@ -3,7 +3,6 @@ import {
   askOpenClaw,
   getOpenClawChatHistory,
   type OpenClawChatHistoryMessage,
-  type OpenClawVerboseEvent,
 } from '../openclaw.js';
 import { type VoiceSessionState } from '../state.js';
 import { formatPipelineError, redactSessionKey, sleep, summarizeSessionKey } from './helpers.js';
@@ -128,73 +127,9 @@ function buildVerboseHistoryMessageKey(message: OpenClawChatHistoryMessage): str
   });
 }
 
-function formatVerboseEventMessage(event: OpenClawVerboseEvent): string | null {
-  const data = event.data ?? {};
-  const phase = typeof data.phase === 'string' ? data.phase : '';
-
-  if (event.stream === 'tool') {
-    const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'tool';
-    if (phase === 'start') {
-      const args = buildVerboseValue(data.args);
-      return trimVerboseMessage(
-        args
-          ? `**Tool start:** \`${name}\`\n\`\`\`json\n${args}\n\`\`\``
-          : `**Tool start:** \`${name}\``,
-      );
-    }
-
-    if (phase === 'update') {
-      const partial = buildVerboseValue(data.partialResult);
-      return trimVerboseMessage(
-        partial
-          ? `**Tool update:** \`${name}\`\n\`\`\`\n${partial}\n\`\`\``
-          : `**Tool update:** \`${name}\``,
-      );
-    }
-
-    if (phase === 'result') {
-      const result = buildVerboseValue(data.result);
-      const prefix = data.isError ? '**Tool error:**' : '**Tool result:**';
-      return trimVerboseMessage(
-        result
-          ? `${prefix} \`${name}\`\n\`\`\`\n${result}\n\`\`\``
-          : `${prefix} \`${name}\``,
-      );
-    }
-
-    return trimVerboseMessage(`**Tool event:** \`${name}\`${phase ? ` (${phase})` : ''}`);
-  }
-
-  if (event.stream === 'error') {
-    const detail = buildVerboseValue(data.error ?? data);
-    return trimVerboseMessage(detail ? `**Agent error**\n\`\`\`\n${detail}\n\`\`\`` : '**Agent error**');
-  }
-
-  if (event.stream === 'lifecycle' && (phase === 'fallback' || phase === 'error')) {
-    const detail = buildVerboseValue(data);
-    return trimVerboseMessage(`**Lifecycle:** \`${phase}\`\n\`\`\`json\n${detail}\n\`\`\``);
-  }
-
-  return null;
-}
-
 async function resolveVerboseThread(guild: Guild, threadId: string): Promise<ThreadChannel | null> {
   const channel = guild.channels.cache.get(threadId) ?? await guild.channels.fetch(threadId).catch(() => null);
   return channel instanceof ThreadChannel ? channel : null;
-}
-
-async function sendVerboseEventToThread(guild: Guild, threadId: string, event: OpenClawVerboseEvent): Promise<void> {
-  const content = formatVerboseEventMessage(event);
-  if (!content) return;
-
-  const thread = await resolveVerboseThread(guild, threadId);
-  if (!thread) return;
-
-  if (thread.archived && !thread.locked) {
-    await thread.setArchived(false).catch(() => {});
-  }
-
-  await thread.send({ content });
 }
 
 async function sendVerboseNoticeToThread(guild: Guild, threadId: string, message: string): Promise<void> {
@@ -241,7 +176,7 @@ async function mirrorVerboseHistoryToThread(
 }
 
 export async function runOpenClawTurnWithOptionalVerbose(options: OpenClawTurnExecutionOptions) {
-  const { guildId: _guildId, guild, session, transcript, logPrefix = '[turn]' } = options;
+  const { guild, session, transcript, logPrefix = '[turn]' } = options;
 
   let openClawResult;
   if (session.verboseEnabled && session.verboseThreadId) {
@@ -333,8 +268,4 @@ export async function ensureVerboseThread(
     ],
   });
   return thread;
-}
-
-export async function sendVerboseHistoryEventToThread(guild: Guild, threadId: string, event: OpenClawVerboseEvent): Promise<void> {
-  await sendVerboseEventToThread(guild, threadId, event);
 }

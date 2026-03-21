@@ -141,7 +141,7 @@ export async function handleHelpButton(interaction: ButtonInteraction) {
 
   if (interaction.customId === HELP_INFO) {
     await interaction.editReply({
-      embeds: [buildInfoEmbed(interaction.guildId, interaction.user.id)],
+      embeds: [buildInfoEmbed(interaction.guildId)],
       components: buildHelpButtons(HELP_INFO),
     });
     return;

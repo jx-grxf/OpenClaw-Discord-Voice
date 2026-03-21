@@ -40,6 +40,7 @@ import { getOrCreateConnectionFromMember } from '../voice.js';
 import {
   VOICE_MODE_AUTO,
   VOICE_TTS_ELEVENLABS,
+  VOICE_TTS_SAY,
   VOICE_TTS_PIPER,
   VOICE_VERBOSE_DISABLE,
   VOICE_VERBOSE_ENABLE,
@@ -550,11 +551,21 @@ export async function handleVoiceTtsButton(interaction: ButtonInteraction) {
     return;
   }
 
-  const nextProvider: TtsProvider = interaction.customId === VOICE_TTS_ELEVENLABS
-    ? 'elevenlabs'
-    : interaction.customId === VOICE_TTS_PIPER
-      ? 'piper'
-      : 'say';
+  let nextProvider: TtsProvider;
+  if (interaction.customId === VOICE_TTS_SAY) {
+    nextProvider = 'say';
+  } else if (interaction.customId === VOICE_TTS_PIPER) {
+    nextProvider = 'piper';
+  } else if (interaction.customId === VOICE_TTS_ELEVENLABS) {
+    nextProvider = 'elevenlabs';
+  } else {
+    await interaction.editReply({
+      content: `Unrecognized TTS button: \`${interaction.customId}\`. Please re-run \`/join\`.`,
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
   const updatedSession = setVoiceSessionTtsProvider(guildId, nextProvider);
   if (!updatedSession) return;
 
@@ -650,5 +661,5 @@ export async function handleLeave(interaction: ChatInputCommandInteraction) {
 }
 
 export async function handleInfo(interaction: ChatInputCommandInteraction) {
-  await interaction.editReply({ embeds: [buildInfoEmbed(interaction.guildId, interaction.user.id)] });
+  await interaction.editReply({ embeds: [buildInfoEmbed(interaction.guildId)] });
 }

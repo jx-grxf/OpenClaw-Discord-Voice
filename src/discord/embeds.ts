@@ -165,7 +165,7 @@ export function buildJoinEmbed(session: VoiceSessionState, options: {
   return embed;
 }
 
-export function buildInfoEmbed(guildId: string | null, userId: string): EmbedBuilder {
+export function buildInfoEmbed(guildId: string | null): EmbedBuilder {
   const health = collectBridgeHealth();
   const issues = summarizeHealthIssues(health);
   const connection = guildId ? getVoiceConnection(guildId) : null;
@@ -180,7 +180,7 @@ export function buildInfoEmbed(guildId: string | null, userId: string): EmbedBui
         `Age: ${formatAge(Date.now() - session.createdAt)}`,
         session.lastUsedAt ? `Last used: ${formatAge(Date.now() - session.lastUsedAt)}` : 'Last used: not yet',
       ]
-    : [formatSessionStatus(guildId, userId)];
+    : [formatSessionStatus(guildId)];
   const activityLines = [
     joinUserId ? `Join setup by \`${joinUserId}\`` : 'No join in progress',
     listenUserId ? `Listen lock by \`${listenUserId}\`` : 'No active listen lock',

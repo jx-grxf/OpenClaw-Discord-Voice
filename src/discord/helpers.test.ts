@@ -84,7 +84,7 @@ test('formatSessionStatus reports active session details', () => {
   });
   session.lastUsedAt = Date.now() - 5_000;
 
-  const status = formatSessionStatus('guild-1', 'user-1');
+  const status = formatSessionStatus('guild-1');
   assert.match(status, /OpenClaw key:/);
   assert.match(status, /OpenClaw session id:/);
   assert.match(status, /Created by Discord user/);

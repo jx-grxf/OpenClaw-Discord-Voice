@@ -10,6 +10,7 @@ import {
   createAudioResource,
 } from '@discordjs/voice';
 import { getWhisperModelPath } from './diagnostics.js';
+import { getConfiguredTtsProvider, getPiperBinaryPath, getPiperModelPath } from './tts-config.js';
 
 export type TtsProvider = 'say' | 'elevenlabs' | 'piper';
 
@@ -96,10 +97,7 @@ function getTtsRate(): string {
 }
 
 export function getTtsProvider(): TtsProvider {
-  const provider = process.env.TTS_PROVIDER?.trim().toLowerCase();
-  if (provider === 'elevenlabs') return 'elevenlabs';
-  if (provider === 'piper') return 'piper';
-  return 'say';
+  return getConfiguredTtsProvider(process.env);
 }
 
 function getElevenLabsApiKey(): string {
@@ -124,18 +122,6 @@ function getElevenLabsModelId(): string {
 
 function getElevenLabsOutputFormat(): string {
   return process.env.ELEVENLABS_OUTPUT_FORMAT?.trim() || 'mp3_44100_128';
-}
-
-function getPiperBinaryPath(): string {
-  const configured = process.env.PIPER_BINARY_PATH?.trim();
-  if (configured) return path.resolve(process.cwd(), configured);
-  return path.resolve(process.cwd(), 'tools', 'piper-venv', 'bin', 'python');
-}
-
-function getPiperModelPath(): string {
-  const configured = process.env.PIPER_MODEL_PATH?.trim();
-  if (configured) return path.resolve(process.cwd(), configured);
-  return path.resolve(process.cwd(), 'models', 'piper', 'de_DE-thorsten-medium.onnx');
 }
 
 function getPiperSpeaker(): string | null {

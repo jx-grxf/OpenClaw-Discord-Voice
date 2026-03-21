@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { getConfiguredTtsProvider, getPiperBinaryPath, getPiperModelPath } from './tts-config.js';
 
 export const REQUIRED_ENV_VARS = ['DISCORD_TOKEN', 'DISCORD_GUILD_ID'] as const;
 export const BASE_REQUIRED_BINARIES = ['openclaw', 'ffmpeg', 'whisper-cli'] as const;
@@ -24,25 +25,6 @@ export function getWhisperModelPath(): string {
   return path.resolve(process.cwd(), 'models', 'ggml-base.bin');
 }
 
-function getTtsProvider(env: NodeJS.ProcessEnv): 'say' | 'elevenlabs' | 'piper' {
-  const provider = env.TTS_PROVIDER?.trim().toLowerCase();
-  if (provider === 'elevenlabs') return 'elevenlabs';
-  if (provider === 'piper') return 'piper';
-  return 'say';
-}
-
-function getPiperBinaryPath(env: NodeJS.ProcessEnv): string {
-  const configured = env.PIPER_BINARY_PATH?.trim();
-  if (configured) return path.resolve(process.cwd(), configured);
-  return path.resolve(process.cwd(), 'tools', 'piper-venv', 'bin', 'python');
-}
-
-function getPiperModelPath(env: NodeJS.ProcessEnv): string {
-  const configured = env.PIPER_MODEL_PATH?.trim();
-  if (configured) return path.resolve(process.cwd(), configured);
-  return path.resolve(process.cwd(), 'models', 'piper', 'de_DE-thorsten-medium.onnx');
-}
-
 function checkBinary(name: string): HealthCheck {
   const result = spawnSync('which', [name], { encoding: 'utf8' });
   if (result.status === 0) {
@@ -60,7 +42,7 @@ export function collectBridgeHealth(env: NodeJS.ProcessEnv = process.env): Bridg
     detail: env[name] ? 'set' : 'missing',
   }));
 
-  const provider = getTtsProvider(env);
+  const provider = getConfiguredTtsProvider(env);
   if (provider === 'elevenlabs') {
     envChecks.push({
       name: 'ELEVENLABS_API_KEY',

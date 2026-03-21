@@ -127,9 +127,9 @@ export function formatSessionStatus(guildId: string | null, userId: string): str
   const session = getVoiceSession(guildId);
   if (!session) return 'No voice session has been prepared for you yet.';
 
-  const details = [`OpenClaw key: ${summarizeSessionKey(session.sessionKey)}`];
+  const details = [`OpenClaw key: \`${redactSessionKey(session.sessionKey)}\``];
   if (session.openClawSessionId) {
-    details.push(`OpenClaw session id: ${summarizeSessionId(session.openClawSessionId)}`);
+    details.push(`OpenClaw session id: \`${truncate(session.openClawSessionId, 24)}\``);
   }
   details.push(`Created by Discord user: \`${session.createdByUserId}\``);
   details.push(`Created: ${formatAge(Date.now() - session.createdAt)}`);

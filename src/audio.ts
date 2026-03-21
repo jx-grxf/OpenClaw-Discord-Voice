@@ -126,14 +126,14 @@ function getElevenLabsOutputFormat(): string {
   return process.env.ELEVENLABS_OUTPUT_FORMAT?.trim() || 'mp3_44100_128';
 }
 
-function getPiperBinaryPath(): string {
-  const configured = process.env.PIPER_BINARY_PATH?.trim();
+export function getPiperBinaryPath(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.PIPER_BINARY_PATH?.trim();
   if (configured) return path.resolve(process.cwd(), configured);
   return path.resolve(process.cwd(), 'tools', 'piper-venv', 'bin', 'python');
 }
 
-function getPiperModelPath(): string {
-  const configured = process.env.PIPER_MODEL_PATH?.trim();
+export function getPiperModelPath(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.PIPER_MODEL_PATH?.trim();
   if (configured) return path.resolve(process.cwd(), configured);
   return path.resolve(process.cwd(), 'models', 'piper', 'de_DE-thorsten-medium.onnx');
 }

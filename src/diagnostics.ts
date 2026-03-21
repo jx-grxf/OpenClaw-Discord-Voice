@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { getPiperBinaryPath, getPiperModelPath } from './audio.js';
 
 export const REQUIRED_ENV_VARS = ['DISCORD_TOKEN', 'DISCORD_GUILD_ID'] as const;
 export const BASE_REQUIRED_BINARIES = ['openclaw', 'ffmpeg', 'whisper-cli'] as const;
@@ -29,18 +30,6 @@ function getTtsProvider(env: NodeJS.ProcessEnv): 'say' | 'elevenlabs' | 'piper' 
   if (provider === 'elevenlabs') return 'elevenlabs';
   if (provider === 'piper') return 'piper';
   return 'say';
-}
-
-function getPiperBinaryPath(env: NodeJS.ProcessEnv): string {
-  const configured = env.PIPER_BINARY_PATH?.trim();
-  if (configured) return path.resolve(process.cwd(), configured);
-  return path.resolve(process.cwd(), 'tools', 'piper-venv', 'bin', 'python');
-}
-
-function getPiperModelPath(env: NodeJS.ProcessEnv): string {
-  const configured = env.PIPER_MODEL_PATH?.trim();
-  if (configured) return path.resolve(process.cwd(), configured);
-  return path.resolve(process.cwd(), 'models', 'piper', 'de_DE-thorsten-medium.onnx');
 }
 
 function checkBinary(name: string): HealthCheck {

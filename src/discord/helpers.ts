@@ -119,13 +119,13 @@ export function buildListenLogDetails(details: {
 }
 
 export function formatSessionStatus(guildId: string | null, userId: string): string {
-  if (!guildId) return 'No voice session has been prepared for you yet.';
+  if (!guildId) return `No voice session has been prepared for you (<@${userId}>) yet.`;
   const joinUserId = getActiveGuildJoinUser(guildId);
   if (joinUserId) {
     return `A voice session is currently being prepared by Discord user: \`${joinUserId}\``;
   }
   const session = getVoiceSession(guildId);
-  if (!session) return 'No voice session has been prepared for you yet.';
+  if (!session) return `No voice session has been prepared for you (<@${userId}>) yet.`;
 
   const details = [`OpenClaw key: \`${redactSessionKey(session.sessionKey)}\``];
   if (session.openClawSessionId) {

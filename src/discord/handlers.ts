@@ -41,6 +41,7 @@ import {
   VOICE_MODE_AUTO,
   VOICE_TTS_ELEVENLABS,
   VOICE_TTS_PIPER,
+  VOICE_TTS_SAY,
   VOICE_VERBOSE_DISABLE,
   VOICE_VERBOSE_ENABLE,
   buildInfoEmbed,
@@ -550,11 +551,21 @@ export async function handleVoiceTtsButton(interaction: ButtonInteraction) {
     return;
   }
 
-  const nextProvider: TtsProvider = interaction.customId === VOICE_TTS_ELEVENLABS
-    ? 'elevenlabs'
-    : interaction.customId === VOICE_TTS_PIPER
-      ? 'piper'
-      : 'say';
+  let nextProvider: TtsProvider;
+  if (interaction.customId === VOICE_TTS_ELEVENLABS) {
+    nextProvider = 'elevenlabs';
+  } else if (interaction.customId === VOICE_TTS_PIPER) {
+    nextProvider = 'piper';
+  } else if (interaction.customId === VOICE_TTS_SAY) {
+    nextProvider = 'say';
+  } else {
+    await interaction.editReply({
+      content: `Unrecognized TTS button: \`${interaction.customId}\`. Please re-run \`/join\`.`,
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
   const updatedSession = setVoiceSessionTtsProvider(guildId, nextProvider);
   if (!updatedSession) return;
 

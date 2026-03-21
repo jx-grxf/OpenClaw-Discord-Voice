@@ -241,7 +241,7 @@ async function mirrorVerboseHistoryToThread(
 }
 
 export async function runOpenClawTurnWithOptionalVerbose(options: OpenClawTurnExecutionOptions) {
-  const { guildId: _guildId, guild, session, transcript, logPrefix = '[turn]' } = options;
+  const { guild, session, transcript, logPrefix = '[turn]' } = options;
 
   let openClawResult;
   if (session.verboseEnabled && session.verboseThreadId) {

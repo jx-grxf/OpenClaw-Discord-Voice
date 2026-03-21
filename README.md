@@ -27,10 +27,13 @@ It is built for self-hosted, personal, or small trusted setups, not as a polishe
 - [Scope](#-scope)
 - [Tech Stack](#-tech-stack)
 - [Requirements](#-requirements)
+- [Dependency Matrix](#-dependency-matrix)
 - [Quick Start](#-quick-start)
 - [Configuration](#-configuration)
 - [Commands](#-commands)
 - [Scripts](#-scripts)
+- [Smoke Test](#-smoke-test)
+- [Doctor Coverage](#-doctor-coverage)
 - [Architecture](#-architecture)
 - [Session Behavior](#-session-behavior)
 - [Known Limitations](#-known-limitations)
@@ -43,7 +46,7 @@ It is built for self-hosted, personal, or small trusted setups, not as a polishe
 |---|---|
 | 🎙️ | Discord slash-command voice bridge for local OpenClaw sessions |
 | 🧠 | Local speech-to-text with Whisper CLI |
-| 🔊 | Switchable TTS: macOS `say` or ElevenLabs |
+| 🔊 | Switchable TTS: Piper, macOS `say`, or ElevenLabs |
 | 🧵 | Optional verbose thread for tool calls and background execution details |
 | 🩺 | Built-in health check via `npm run doctor:bridge` and `/info` |
 | 🧪 | Debug helper `/debugtext` for text-only session testing |
@@ -67,19 +70,37 @@ It is built for self-hosted, personal, or small trusted setups, not as a polishe
 | **Voice pipeline** | Discord Voice, Opus decode, PCM → WAV via `ffmpeg` |
 | **Speech-to-text** | `whisper-cli` with local GGML models |
 | **OpenClaw bridge** | local `openclaw` CLI + gateway |
-| **Text-to-speech** | macOS `say` or ElevenLabs |
+| **Text-to-speech** | Piper, macOS `say`, or ElevenLabs |
 
 ---
 
 ## 📋 Requirements
 
-- **macOS** with `say`
+- **macOS**
 - **Node.js** `20+`
 - **openclaw**
 - **ffmpeg**
 - **whisper-cli**
 - Whisper model at `models/ggml-base.bin` or another configured path
 - Discord bot credentials for a single-guild setup
+
+If you are starting from scratch, install and verify OpenClaw first. This bridge assumes OpenClaw is already healthy locally before Discord is added on top.
+
+---
+
+## 🧩 Dependency Matrix
+
+| Dependency | Required | Why it exists | Notes |
+|---|---|---|---|
+| `openclaw` | Yes | Backend session + agent execution | Must already work locally |
+| `ffmpeg` | Yes | PCM → WAV conversion | Checked by `doctor` |
+| `whisper-cli` | Yes | Local STT | Needs a compatible model file |
+| Whisper model | Yes | Speech recognition | Default is `models/ggml-base.bin` |
+| `say` | No | Built-in macOS fallback TTS | Lowest quality, but zero setup |
+| Piper runtime + model | No | Better local TTS | Recommended local default |
+| ElevenLabs API | No | Cloud TTS | Higher quality, costs credits |
+| Discord bot token | Yes | Bot login | Local `.env` only |
+| Discord guild id | Yes | Guild command registration | Single-guild focused |
 
 At startup the bot checks:
 
@@ -89,6 +110,7 @@ At startup the bot checks:
 - `ffmpeg`
 - `whisper-cli`
 - `say`
+- `python3`
 - the configured Whisper model path
 
 ---
@@ -104,12 +126,14 @@ npm run doctor:bridge
 npm run dev
 ```
 
-Before the bot can actually start, you still need:
+This quick start only works if these are already true:
 
 - a working local `openclaw` installation
-- `ffmpeg`, `whisper-cli`, and macOS `say`
+- `ffmpeg`, `whisper-cli`, and either Piper, macOS `say`, or ElevenLabs
 - a Whisper model file in `models/`
 - valid `DISCORD_TOKEN` and `DISCORD_GUILD_ID` values in `.env`
+
+If any of those are missing, use the detailed setup guide first:
 
 More details:
 
@@ -131,9 +155,12 @@ More details:
 
 | Variable | Purpose |
 |---|---|
-| `TTS_PROVIDER` | `say` or `elevenlabs`, default `say` |
+| `TTS_PROVIDER` | `piper`, `say`, or `elevenlabs`, default `piper` |
 | `TTS_VOICE` | macOS `say` voice, default `Flo` |
 | `TTS_RATE` | macOS `say` rate, default `220` |
+| `PIPER_BINARY_PATH` | Piper runner path, default `tools/piper-venv/bin/python` |
+| `PIPER_MODEL_PATH` | Piper model path, default `models/piper/de_DE-thorsten-medium.onnx` |
+| `PIPER_SPEAKER` | Optional speaker id for multi-speaker Piper models |
 | `ELEVENLABS_API_KEY` | Required for `TTS_PROVIDER=elevenlabs` |
 | `ELEVENLABS_VOICE_ID` | Required for `TTS_PROVIDER=elevenlabs` |
 | `ELEVENLABS_MODEL_ID` | Optional, default `eleven_multilingual_v2` |
@@ -185,6 +212,44 @@ Run from the repository root:
 
 ---
 
+## ✅ Smoke Test
+
+Use this to verify a real end-to-end setup after `doctor` passes:
+
+1. Run `npm run build`
+2. Run `npm run dev`
+3. In Discord, run `/info` and confirm env/binaries/model are healthy
+4. Join a voice channel and run `/join`
+5. Confirm the embed shows a session key and session id
+6. Run `/listen`, wait for the prompt, then speak one short sentence
+7. Confirm the bot posts your transcript and an OpenClaw reply
+8. Switch TTS inside `/join` if you want to compare `Piper`, `Say`, or `ElevenLabs`
+9. Run `/leave` and confirm the bot disconnects cleanly
+
+---
+
+## 🩺 Doctor Coverage
+
+`npm run doctor:bridge` is a fast health check, not a full runtime proof.
+
+It validates:
+
+- required env vars
+- expected local binaries
+- Whisper model path
+- Discord bot auth
+
+It does **not** validate:
+
+- live Discord voice receive in your current channel
+- Discord permissions/mute/deafen/runtime state
+- whether OpenClaw tool calls will succeed for a specific prompt
+- whether cleanup will succeed for every local gateway/session edge case
+
+That is why the manual smoke test still matters.
+
+---
+
 ## 🧠 Architecture
 
 1. Receive a Discord slash command
@@ -210,6 +275,7 @@ Run from the repository root:
 ## ⚠️ Known Limitations
 
 - `say` is **macOS-only**
+- Piper is local and free, but you still need the model + Python environment installed
 - Discord voice receive is sensitive to real runtime conditions such as mute/deafen state, permissions, push-to-talk, and who is speaking
 - Session continuity still depends on what the local OpenClaw runtime returns
 - End-to-end validation is still primarily a **manual live Discord smoke test**

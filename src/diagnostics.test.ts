@@ -32,3 +32,18 @@ test('collectBridgeHealth requires ElevenLabs credentials when provider is eleve
   assert(issues.some((issue) => issue.startsWith('ELEVENLABS_VOICE_ID:')));
   assert.equal(issues.some((issue) => issue.startsWith('say:')), false);
 });
+
+test('collectBridgeHealth checks Piper binary and model when provider is piper', () => {
+  const health = collectBridgeHealth({
+    DISCORD_TOKEN: 'token',
+    DISCORD_GUILD_ID: 'guild',
+    TTS_PROVIDER: 'piper',
+    PIPER_BINARY_PATH: 'tools/piper-venv/bin/python',
+    PIPER_MODEL_PATH: 'models/piper/de_DE-thorsten-medium.onnx',
+  });
+  const issues = summarizeHealthIssues(health);
+
+  assert.equal(issues.some((issue) => issue.startsWith('say:')), false);
+  assert.equal(issues.some((issue) => issue.startsWith('ELEVENLABS_API_KEY:')), false);
+  assert.equal(issues.some((issue) => issue.startsWith('Piper model:')), false);
+});

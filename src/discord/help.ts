@@ -8,7 +8,7 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { checkDiscordBotAuth, collectBridgeHealth } from '../diagnostics.js';
-import { buildInfoEmbed } from './handlers.js';
+import { buildInfoEmbed } from './embeds.js';
 
 const HELP_HOME = 'help:home';
 const HELP_COMMANDS = 'help:commands';

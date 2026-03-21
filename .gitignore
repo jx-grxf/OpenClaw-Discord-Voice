@@ -5,3 +5,6 @@ tmp
 logs
 .DS_Store
 models/*.bin
+models/piper/
+tools/piper/
+tools/piper-venv/

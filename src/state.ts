@@ -27,7 +27,10 @@ function resolveOpenClawAgentId(): string {
 }
 
 function resolveDefaultTtsProvider(): TtsProvider {
-  return process.env.TTS_PROVIDER?.trim().toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'say';
+  const provider = process.env.TTS_PROVIDER?.trim().toLowerCase();
+  if (provider === 'elevenlabs') return 'elevenlabs';
+  if (provider === 'piper') return 'piper';
+  return 'say';
 }
 
 export function buildVoiceSessionKey(guildId: string, channelId: string): string {

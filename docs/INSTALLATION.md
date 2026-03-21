@@ -13,6 +13,7 @@ which ffmpeg
 which whisper-cli
 which openclaw
 which say
+python3 --version
 ```
 
 `openclaw` must already be installed and working locally.
@@ -22,7 +23,7 @@ Recommended:
 - install OpenClaw first from the official repo: [openclaw/openclaw](https://github.com/openclaw/openclaw)
 - confirm `openclaw gateway call agent --help` or at least `openclaw --help` works before starting this bot
 
-This project currently assumes macOS because reply audio is generated with `say`. Linux and Windows are not documented or supported as-is.
+This project currently assumes macOS for the easiest Discord voice setup. TTS can run through local Piper, macOS `say`, or ElevenLabs.
 
 ## 2) Clone the repo and install Node dependencies
 
@@ -45,11 +46,31 @@ Set:
 - `DISCORD_TOKEN`
 - `DISCORD_GUILD_ID`
 
+Discord bot setup, if you do not already have one:
+
+1. Create a new application in the Discord Developer Portal
+2. Add a bot user to that application
+3. Copy the bot token into `DISCORD_TOKEN`
+4. Invite the bot to your test guild with slash command + voice permissions
+5. Right-click your guild, copy its id, and place it into `DISCORD_GUILD_ID`
+
+Recommended Discord permissions:
+
+- `View Channels`
+- `Send Messages`
+- `Use Application Commands`
+- `Connect`
+- `Speak`
+- `Read Message History`
+
 Optional:
 
-- `TTS_PROVIDER` to choose `say` or `elevenlabs`. Default: `say`
+- `TTS_PROVIDER` to choose `piper`, `say`, or `elevenlabs`. Default: `piper`
 - `TTS_VOICE` to choose the macOS `say` voice. Default: `Flo`
 - `TTS_RATE` to set the macOS `say` speaking rate. Default: `220`
+- `PIPER_BINARY_PATH` optional, default `tools/piper-venv/bin/python`
+- `PIPER_MODEL_PATH` optional, default `models/piper/de_DE-thorsten-medium.onnx`
+- `PIPER_SPEAKER` optional for multi-speaker Piper models
 - `ELEVENLABS_API_KEY` if you use `TTS_PROVIDER=elevenlabs`
 - `ELEVENLABS_VOICE_ID` if you use `TTS_PROVIDER=elevenlabs`
 - `ELEVENLABS_MODEL_ID` optional, default `eleven_multilingual_v2`
@@ -104,7 +125,32 @@ npm start
 
 The bot registers guild slash commands automatically on startup.
 
+If startup fails, do not jump straight into Discord debugging yet. First confirm:
+
+- `openclaw --help` works
+- `openclaw gateway call agent --help` works
+- `which ffmpeg`
+- `which whisper-cli`
+- your configured TTS provider is actually available
+
 ## TTS providers
+
+Recommended local default:
+
+- `TTS_PROVIDER=piper`
+- install the Python runtime once:
+
+```bash
+python3 -m venv tools/piper-venv
+source tools/piper-venv/bin/activate
+pip install -U pip
+pip install piper-tts pathvalidate
+```
+
+- download a Piper model into `models/piper/`
+- default model used by this repo:
+  - `models/piper/de_DE-thorsten-medium.onnx`
+  - `models/piper/de_DE-thorsten-medium.onnx.json`
 
 Default:
 
@@ -130,5 +176,6 @@ Recommended for better accuracy:
 
 - Successful startup only confirms the expected env vars, binaries, and Whisper model are present.
 - It does not prove Discord voice receive will work in your runtime environment.
+- It also does not prove your local OpenClaw gateway token has every scope needed for optional features like verbose/cleanup edge cases.
 - Real verification still requires a manual smoke test in a Discord voice channel; see `docs/USAGE.md`.
 - `/help` in Discord is the easiest way to discover commands, info, and doctor output after startup.

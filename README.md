@@ -28,6 +28,7 @@ It is built for self-hosted, personal, or small trusted setups, not as a polishe
 - [Tech Stack](#-tech-stack)
 - [Requirements](#-requirements)
 - [Quick Start](#-quick-start)
+- [Docker (test without a macOS VM)](#-docker--test-without-a-macos-vm)
 - [Configuration](#-configuration)
 - [Commands](#-commands)
 - [Scripts](#-scripts)
@@ -115,6 +116,21 @@ More details:
 
 - [docs/INSTALLATION.md](docs/INSTALLATION.md)
 - [docs/USAGE.md](docs/USAGE.md)
+
+---
+
+## 🐳 Docker – test without a macOS VM
+
+If you want to test the installation on a clean system without setting up a macOS VM, use Docker.
+A `Dockerfile` and `docker-compose.yml` are included.
+
+```bash
+cp .env.example .env   # set TTS_PROVIDER=elevenlabs and ElevenLabs credentials
+docker compose build   # compiles whisper-cli, installs ffmpeg, builds the app
+docker compose up
+```
+
+Full instructions: [docs/DOCKER.md](docs/DOCKER.md)
 
 ---
 

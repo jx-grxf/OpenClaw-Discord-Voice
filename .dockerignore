@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+tmp
+logs
+models/*.bin
+.DS_Store
+*.log

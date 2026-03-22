@@ -1,0 +1,24 @@
+services:
+  bot:
+    build: .
+    # Override the default TTS provider since macOS `say` is not available.
+    # Supply your ElevenLabs credentials in .env or via the environment block.
+    environment:
+      - TTS_PROVIDER=elevenlabs
+    env_file:
+      - .env
+    volumes:
+      # Mount your local Whisper model file:
+      #   mkdir -p models
+      #   curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin \
+      #        -o models/ggml-base.bin
+      - ./models:/app/models:ro
+
+      # Temporary audio files – writable, not persisted across restarts
+      - ./tmp:/app/tmp
+
+      # Mount the local openclaw binary from your Mac host.
+      # Uncomment the line below once openclaw is installed and in PATH
+      # (adjust the host path to match `which openclaw` on your machine):
+      # - /usr/local/bin/openclaw:/usr/local/bin/openclaw:ro
+    restart: unless-stopped

@@ -1,5 +1,8 @@
 # Installation
 
+> **Want to test on a clean system without a macOS VM?**
+> Use Docker instead – see [docs/DOCKER.md](DOCKER.md) for a Linux container setup that runs on any Mac with Docker Desktop.
+
 ## 1) Install system dependencies
 
 ```bash

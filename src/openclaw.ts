@@ -158,7 +158,7 @@ function isStatusPlaceholder(value: string | null | undefined): boolean {
   return normalized === 'completed' || normalized === 'accepted' || normalized === 'in_progress' || normalized === 'ok';
 }
 
-function parseOpenClawResponse(raw: string): OpenClawResponse | null {
+function parseOpenClawResponse(raw: string): OpenClawResponse | null { 
   const trimmed = raw.trim();
   if (!trimmed) return null;
 

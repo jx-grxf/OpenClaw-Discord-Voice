@@ -180,7 +180,7 @@ test('buildOpenClawAgentParams targets the stable session key and optional sessi
   });
 
   assert.equal(typeof params.idempotencyKey, 'string');
-  assert.equal(String(params.idempotencyKey).startsWith('discord-voice-'), true);
+  assert.equal(String(params.idempotencyKey).startsWith('openclaw-discord-voice-'), true);
   assert.equal(params.message, 'Hello there');
   assert.equal(params.sessionKey, 'agent:main:discord:voice:guild:guild-1:channel:channel-1:join:test');
   assert.equal(params.sessionId, 'oc-session-123');

@@ -10,8 +10,9 @@ import {
   createAudioResource,
 } from '@discordjs/voice';
 import { getWhisperModelPath } from './diagnostics.js';
+import { getConfiguredTtsProvider, getPiperBinaryPath, getPiperModelPath } from './tts-config.js';
 
-export type TtsProvider = 'say' | 'elevenlabs';
+export type TtsProvider = 'say' | 'elevenlabs' | 'piper';
 
 export async function convertPcmToWav(pcmPath: string, wavPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -96,7 +97,7 @@ function getTtsRate(): string {
 }
 
 export function getTtsProvider(): TtsProvider {
-  return process.env.TTS_PROVIDER?.trim().toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'say';
+  return getConfiguredTtsProvider(process.env);
 }
 
 function getElevenLabsApiKey(): string {
@@ -123,12 +124,19 @@ function getElevenLabsOutputFormat(): string {
   return process.env.ELEVENLABS_OUTPUT_FORMAT?.trim() || 'mp3_44100_128';
 }
 
+function getPiperSpeaker(): string | null {
+  const configured = process.env.PIPER_SPEAKER?.trim();
+  return configured || null;
+}
+
 export function getTtsOutputExtension(): string {
-  return getTtsProvider() === 'elevenlabs' ? 'mp3' : 'aiff';
+  return getTtsOutputExtensionForProvider(getTtsProvider());
 }
 
 export function getTtsOutputExtensionForProvider(provider: TtsProvider): string {
-  return provider === 'elevenlabs' ? 'mp3' : 'aiff';
+  if (provider === 'elevenlabs') return 'mp3';
+  if (provider === 'piper') return 'wav';
+  return 'aiff';
 }
 
 export async function synthesizeWithSay(text: string, outPath: string): Promise<void> {
@@ -173,9 +181,61 @@ export async function synthesizeWithElevenLabs(text: string, outPath: string): P
   await fs.promises.writeFile(outPath, audioBuffer);
 }
 
+export async function synthesizeWithPiper(text: string, outPath: string): Promise<void> {
+  const binaryPath = getPiperBinaryPath();
+  const modelPath = getPiperModelPath();
+
+  if (!fs.existsSync(binaryPath)) {
+    throw new Error(`Piper binary missing: ${binaryPath}`);
+  }
+
+  if (!fs.existsSync(modelPath)) {
+    throw new Error(`Piper model missing: ${modelPath}`);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const isPythonLauncher = /(^|\/)python[0-9.]*$/.test(binaryPath);
+    const args = [
+      ...(isPythonLauncher ? ['-m', 'piper'] : []),
+      '--model',
+      modelPath,
+      '--output_file',
+      outPath,
+    ];
+    const speaker = getPiperSpeaker();
+    if (speaker) {
+      args.push('--speaker', speaker);
+    }
+
+    const proc = spawn(binaryPath, args, {
+      cwd: process.cwd(),
+    });
+
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`piper exited with code ${code}: ${stderr || 'no additional details'}`));
+    });
+    proc.stdin.write(text);
+    proc.stdin.end();
+  });
+}
+
 export async function synthesizeSpeech(text: string, outPath: string, provider: TtsProvider = getTtsProvider()): Promise<void> {
   if (provider === 'elevenlabs') {
     await synthesizeWithElevenLabs(text, outPath);
+    return;
+  }
+
+  if (provider === 'piper') {
+    await synthesizeWithPiper(text, outPath);
     return;
   }
 

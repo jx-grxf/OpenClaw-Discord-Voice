@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { getConfiguredTtsProvider, getPiperBinaryPath, getPiperModelPath } from './tts-config.js';
 
 export const REQUIRED_ENV_VARS = ['DISCORD_TOKEN', 'DISCORD_GUILD_ID'] as const;
 export const BASE_REQUIRED_BINARIES = ['openclaw', 'ffmpeg', 'whisper-cli'] as const;
@@ -24,10 +25,6 @@ export function getWhisperModelPath(): string {
   return path.resolve(process.cwd(), 'models', 'ggml-base.bin');
 }
 
-function getTtsProvider(env: NodeJS.ProcessEnv): 'say' | 'elevenlabs' {
-  return env.TTS_PROVIDER?.trim().toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'say';
-}
-
 function checkBinary(name: string): HealthCheck {
   const result = spawnSync('which', [name], { encoding: 'utf8' });
   if (result.status === 0) {
@@ -45,7 +42,7 @@ export function collectBridgeHealth(env: NodeJS.ProcessEnv = process.env): Bridg
     detail: env[name] ? 'set' : 'missing',
   }));
 
-  const provider = getTtsProvider(env);
+  const provider = getConfiguredTtsProvider(env);
   if (provider === 'elevenlabs') {
     envChecks.push({
       name: 'ELEVENLABS_API_KEY',
@@ -61,16 +58,34 @@ export function collectBridgeHealth(env: NodeJS.ProcessEnv = process.env): Bridg
 
   const requiredBinaries = [...BASE_REQUIRED_BINARIES, ...(provider === 'say' ? ['say'] : [])];
   const binaryChecks = requiredBinaries.map((name) => checkBinary(name));
+  if (provider === 'piper') {
+    const piperPath = getPiperBinaryPath(env);
+    binaryChecks.push({
+      name: 'piper',
+      ok: fs.existsSync(piperPath),
+      detail: fs.existsSync(piperPath) ? piperPath : `missing: ${piperPath}`,
+    });
+  }
   const modelPath = getWhisperModelPath();
   const whisperModel = {
     name: 'Whisper model',
     ok: fs.existsSync(modelPath),
     detail: fs.existsSync(modelPath) ? modelPath : `missing: ${modelPath}`,
   };
+  const piperModelPath = getPiperModelPath(env);
+  const piperModel = provider === 'piper'
+    ? {
+        name: 'Piper model',
+        ok: fs.existsSync(piperModelPath),
+        detail: fs.existsSync(piperModelPath)
+          ? piperModelPath
+          : `missing: ${piperModelPath}`,
+      }
+    : null;
 
   return {
     env: envChecks,
-    binaries: binaryChecks,
+    binaries: piperModel ? [...binaryChecks, piperModel] : binaryChecks,
     whisperModel,
   };
 }

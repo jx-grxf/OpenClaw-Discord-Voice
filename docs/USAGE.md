@@ -13,6 +13,8 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 
 - `/join` - join your voice channel and create a fresh OpenClaw voice session for this joined connection
 - `/listen` - process exactly one spoken turn from the invoking user
+- `/debugtext` - send a text prompt directly into the active voice session, optionally without TTS playback
+- `/voice-verbose` - mirror tool calls and background execution details into a separate Discord thread
 - `/leave` - disconnect the voice connection
 - `/info` - show voice status, in-memory session status, and dependency health
 - `/help` - open the interactive help menu with buttons for Commands, Info, and Doctor
@@ -29,10 +31,12 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 
 ## Known limitations
 
-- Reply playback is macOS-only because TTS uses `say`.
+- Reply playback can use Piper, macOS `say`, or ElevenLabs.
+- Auto-listen is still beta-grade and should be treated as an experimental convenience mode.
 - Voice receive is sensitive to mute/deafen state, push-to-talk or voice activity, channel permissions, and when the speaker starts talking.
 - `/listen` is a one-turn interaction, not a continuous streaming conversation mode.
 - End-to-end validation remains a manual smoke test, not a fully automated integration test.
+- Verbose mode is best-effort and depends on what the local OpenClaw runtime exposes for the current session.
 
 ## Troubleshooting
 
@@ -64,11 +68,13 @@ This bridge is best treated as an experimental self-hosted tool. The happy path 
 - Check locally that `openclaw agent --help` works.
 - Confirm the local OpenClaw gateway and agent setup are healthy.
 - Check `/info` for the session key and any returned session id.
+- If a turn fails with a gateway close/1000 message, retry once before assuming the bridge state is broken; the local gateway can flake transiently.
 - If you also inspect `openclaw sessions`, treat that as a local OpenClaw diagnostic, not as a guarantee provided by this bridge.
 
 ### No playback
 
 - Check the bot's voice-channel permissions.
+- If `TTS_PROVIDER=piper`, check that `tools/piper-venv/bin/python` exists and `PIPER_MODEL_PATH` points to a real `.onnx` model.
 - If `TTS_PROVIDER=say`, check that `say` works on macOS with your chosen `TTS_VOICE` and `TTS_RATE`.
 - If `TTS_PROVIDER=elevenlabs`, check that `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` are valid.
 
@@ -85,3 +91,4 @@ This is still a manual end-to-end check:
 7. Confirm the reply shows your transcript and the same OpenClaw key/session id that `/join` created.
 8. Optionally run `openclaw sessions` locally and confirm the voice session exists while connected.
 9. Run `/leave` and confirm the bot disconnects and the voice session disappears or is archived on the OpenClaw side.
+10. Optionally enable `/voice-verbose` and verify a tool-heavy prompt creates thread updates while the final answer still lands in the main channel.

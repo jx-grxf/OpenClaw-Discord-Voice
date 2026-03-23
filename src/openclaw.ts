@@ -158,7 +158,7 @@ function isStatusPlaceholder(value: string | null | undefined): boolean {
   return normalized === 'completed' || normalized === 'accepted' || normalized === 'in_progress' || normalized === 'ok';
 }
 
-function parseOpenClawResponse(raw: string): OpenClawResponse | null {
+function parseOpenClawResponse(raw: string): OpenClawResponse | null { 
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
@@ -424,7 +424,7 @@ async function runOpenClawGatewayCallWithRetry(
 
 export function buildOpenClawAgentParams(transcript: string, session: OpenClawSessionRef): Record<string, unknown> {
   return {
-    idempotencyKey: `discord-voice-${randomUUID()}`,
+    idempotencyKey: `openclaw-discord-voice-${randomUUID()}`,
     message: transcript.trim(),
     sessionKey: session.sessionKey.trim(),
     sessionId: session.sessionId?.trim() || undefined,
@@ -658,7 +658,7 @@ function buildGatewayConnectRequest(
       client: {
         id: 'gateway-client',
         version: '1.0.0',
-        platform: 'discord-voice-assistant',
+        platform: 'OpenClaw-Discord-Voice',
         mode: 'backend',
       },
       role: 'operator',
@@ -849,7 +849,7 @@ export async function askOpenClawWithVerbose(
   }
 
   const requestId = `chat-send-${randomUUID()}`;
-  const runId = `discord-voice-${randomUUID()}`;
+  const runId = `openclaw-discord-voice-${randomUUID()}`;
   const ws = await connectGatewaySocketWithRetry(10_000, 2, {
     scopes: ['operator.read', 'operator.write'],
     caps: ['tool-events'],

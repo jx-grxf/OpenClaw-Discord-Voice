@@ -80,7 +80,7 @@ test('voice session verbose mode can bind a verbose thread', () => {
   clearVoiceSession('guild-verbose');
 });
 
-test('voice session tts provider can switch between say and elevenlabs', () => {
+test('voice session tts provider can switch between say, elevenlabs, and piper', () => {
   createVoiceSession('guild-tts', 'channel-1', 'user-1');
 
   const updated = setVoiceSessionTtsProvider('guild-tts', 'elevenlabs');
@@ -90,6 +90,9 @@ test('voice session tts provider can switch between say and elevenlabs', () => {
 
   setVoiceSessionTtsProvider('guild-tts', 'say');
   assert.equal(getVoiceSession('guild-tts')?.ttsProvider, 'say');
+
+  setVoiceSessionTtsProvider('guild-tts', 'piper');
+  assert.equal(getVoiceSession('guild-tts')?.ttsProvider, 'piper');
 
   clearVoiceSession('guild-tts');
 });
